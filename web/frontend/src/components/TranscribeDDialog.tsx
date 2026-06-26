@@ -16,7 +16,7 @@ import {
 } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
-import { Loader2 } from "lucide-react";
+import { Loader2, SlidersHorizontal } from "lucide-react";
 import type { WhisperXParams } from "./TranscriptionConfigDialog";
 import { useAuth } from "@/features/auth/hooks/useAuth";
 
@@ -36,6 +36,9 @@ interface TranscribeDDialogProps {
   onStartTranscription: (params: WhisperXParams, profileId?: string) => void;
   loading?: boolean;
   title?: string;
+  description?: string;
+  actionLabel?: string;
+  onAdvanced?: () => void;
 }
 
 export function TranscribeDDialog({
@@ -44,6 +47,9 @@ export function TranscribeDDialog({
   onStartTranscription,
   loading = false,
   title,
+  description,
+  actionLabel = "Start Transcription",
+  onAdvanced,
 }: TranscribeDDialogProps) {
   const { getAuthHeaders } = useAuth();
   const [profiles, setProfiles] = useState<TranscriptionProfile[]>([]);
@@ -124,7 +130,7 @@ export function TranscribeDDialog({
             {title || "Transcribe with Profile"}
           </DialogTitle>
           <DialogDescription className="text-[var(--text-secondary)] text-sm mt-1.5">
-            Choose a saved profile to start transcription with your preferred settings.
+            {description || "Choose a saved profile to start transcription with your preferred settings."}
           </DialogDescription>
         </DialogHeader>
 
@@ -194,6 +200,17 @@ export function TranscribeDDialog({
           >
             Cancel
           </Button>
+          {onAdvanced && (
+            <Button
+              variant="outline"
+              onClick={onAdvanced}
+              disabled={loading}
+              className="rounded-[var(--radius-btn)] border-[var(--border-subtle)] bg-[var(--bg-main)] text-[var(--text-secondary)] hover:bg-[var(--bg-card)] hover:text-[var(--text-primary)]"
+            >
+              <SlidersHorizontal className="mr-2 h-4 w-4" />
+              Advanced
+            </Button>
+          )}
           <Button
             onClick={handleStartTranscription}
             disabled={loading || !selectedProfileId || profilesLoading || profiles.length === 0}
@@ -205,7 +222,7 @@ export function TranscribeDDialog({
                 Starting...
               </>
             ) : (
-              "Start Transcription"
+              actionLabel
             )}
           </Button>
         </DialogFooter>

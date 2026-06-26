@@ -18,6 +18,7 @@ import { useSpeakerMappings } from "@/features/transcription/hooks/useTranscript
 import { useTranscriptDownload } from "@/features/transcription/hooks/useTranscriptDownload";
 import { useAuth } from "@/features/auth/hooks/useAuth";
 import { TranscriptionConfigDialog, type WhisperXParams } from "@/components/TranscriptionConfigDialog";
+import { TranscribeDDialog } from "@/components/TranscribeDDialog";
 
 // Sub-components
 import { TranscriptSection } from "./audio-detail/TranscriptSection";
@@ -66,7 +67,8 @@ export const AudioDetailView = function AudioDetailView({ audioId: propAudioId }
     const [logsDialogOpen, setLogsDialogOpen] = useState(false);
     const [logsDialogRunId, setLogsDialogRunId] = useState<string | undefined>();
     const [summaryDialogOpen, setSummaryDialogOpen] = useState(false);
-    const [rerunDialogOpen, setRerunDialogOpen] = useState(false);
+    const [rerunProfileDialogOpen, setRerunProfileDialogOpen] = useState(false);
+    const [rerunAdvancedDialogOpen, setRerunAdvancedDialogOpen] = useState(false);
     const [rerunLoading, setRerunLoading] = useState(false);
     const [selectedRunId, setSelectedRunId] = useState<string | undefined>();
     const [compareRunId, setCompareRunId] = useState<string | undefined>();
@@ -203,7 +205,8 @@ export const AudioDetailView = function AudioDetailView({ audioId: propAudioId }
                 throw new Error(errorText || "Failed to start rerun");
             }
 
-            setRerunDialogOpen(false);
+            setRerunProfileDialogOpen(false);
+            setRerunAdvancedDialogOpen(false);
             await Promise.all([
                 queryClient.invalidateQueries({ queryKey: ["audio", audioId] }),
                 queryClient.invalidateQueries({ queryKey: ["transcript", audioId] }),
@@ -254,6 +257,11 @@ export const AudioDetailView = function AudioDetailView({ audioId: propAudioId }
     const handleOpenRunLogs = useCallback((runId?: string) => {
         setLogsDialogRunId(runId);
         setLogsDialogOpen(true);
+    }, []);
+
+    const handleOpenRerunAdvanced = useCallback(() => {
+        setRerunProfileDialogOpen(false);
+        setRerunAdvancedDialogOpen(true);
     }, []);
 
     if (!audioId) return <div>Invalid Audio ID</div>;
@@ -425,7 +433,7 @@ export const AudioDetailView = function AudioDetailView({ audioId: propAudioId }
                                             <Button
                                                 variant="outline"
                                                 size="sm"
-                                                onClick={() => setRerunDialogOpen(true)}
+                                                onClick={() => setRerunProfileDialogOpen(true)}
                                                 disabled={audioFile.status === "processing" || audioFile.status === "pending"}
                                                 className="rounded-full border-[var(--border-subtle)] shadow-sm bg-[var(--bg-card)] hover:bg-[var(--bg-main)] transition-all gap-2 px-3"
                                             >
@@ -481,7 +489,7 @@ export const AudioDetailView = function AudioDetailView({ audioId: propAudioId }
                                                     </DropdownMenuItem>
                                                     <DropdownMenuSeparator className="bg-[var(--border-subtle)] my-1" />
                                                     <DropdownMenuItem
-                                                        onClick={() => setRerunDialogOpen(true)}
+                                                        onClick={() => setRerunProfileDialogOpen(true)}
                                                         disabled={audioFile.status === "processing" || audioFile.status === "pending"}
                                                         className="rounded-[8px] cursor-pointer"
                                                     >
@@ -520,7 +528,7 @@ export const AudioDetailView = function AudioDetailView({ audioId: propAudioId }
                                     onSelectedRunChange={setSelectedRunId}
                                     onCompareRunChange={setCompareRunId}
                                     onModeChange={setRunViewMode}
-                                    onRunAgain={() => setRerunDialogOpen(true)}
+                                    onRunAgain={() => setRerunProfileDialogOpen(true)}
                                     onOpenRunDetails={handleOpenRunDetails}
                                     onOpenRunLogs={handleOpenRunLogs}
                                     onDownloadRun={handleRunDownload}
@@ -615,14 +623,24 @@ export const AudioDetailView = function AudioDetailView({ audioId: propAudioId }
                 onClose={setSummaryDialogOpen}
                 llmReady={true}
             />
+            <TranscribeDDialog
+                open={rerunProfileDialogOpen}
+                onOpenChange={setRerunProfileDialogOpen}
+                onStartTranscription={handleRerun}
+                loading={rerunLoading}
+                title="Run Again"
+                description="Choose a saved profile for this new run, or open Advanced to tweak the parameters manually."
+                actionLabel="Run Again"
+                onAdvanced={handleOpenRerunAdvanced}
+            />
             <TranscriptionConfigDialog
-                open={rerunDialogOpen}
-                onOpenChange={setRerunDialogOpen}
+                open={rerunAdvancedDialogOpen}
+                onOpenChange={setRerunAdvancedDialogOpen}
                 onStartTranscription={handleRerun}
                 loading={rerunLoading}
                 initialParams={audioFile.parameters as WhisperXParams | undefined}
                 isMultiTrack={audioFile.is_multi_track}
-                title="Run Again"
+                title="Run Again Advanced"
             />
 
             {/* Mobile / Overlay Chat */}
