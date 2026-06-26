@@ -37,11 +37,16 @@ func TestConvertToCanaryParamsIncludesNvidiaControls(t *testing.T) {
 	timestamps := false
 	targetLang := "de"
 	sourceLang := "fr"
+	chunking := true
 
 	paramMap := service.convertToCanaryParams(models.WhisperXParams{
 		BatchSize:            99,
+		Device:               "cuda",
 		Task:                 "translate",
 		Language:             &sourceLang,
+		NvidiaChunkDuration:  30,
+		NvidiaUseChunking:    &chunking,
+		NvidiaPrecision:      "bfloat16",
 		NvidiaTargetLanguage: &targetLang,
 		NvidiaTimestamps:     &timestamps,
 	})
@@ -52,11 +57,39 @@ func TestConvertToCanaryParamsIncludesNvidiaControls(t *testing.T) {
 	if paramMap["timestamps"] != false {
 		t.Fatalf("expected timestamps false, got %v", paramMap["timestamps"])
 	}
+	if paramMap["chunk_duration"] != 30 {
+		t.Fatalf("expected chunk_duration 30, got %v", paramMap["chunk_duration"])
+	}
+	if paramMap["chunking"] != true {
+		t.Fatalf("expected chunking true, got %v", paramMap["chunking"])
+	}
+	if paramMap["device"] != "cuda" {
+		t.Fatalf("expected device cuda, got %v", paramMap["device"])
+	}
+	if paramMap["precision"] != "bfloat16" {
+		t.Fatalf("expected precision bfloat16, got %v", paramMap["precision"])
+	}
 	if paramMap["source_lang"] != "fr" {
 		t.Fatalf("expected source_lang fr, got %v", paramMap["source_lang"])
 	}
 	if paramMap["target_lang"] != "de" {
 		t.Fatalf("expected target_lang de, got %v", paramMap["target_lang"])
+	}
+}
+
+func TestConvertToCanaryParamsUsesChunkDefault(t *testing.T) {
+	service := NewUnifiedTranscriptionService(nil, "data/temp", "data/transcripts")
+
+	paramMap := service.convertToCanaryParams(models.WhisperXParams{})
+
+	if paramMap["chunk_duration"] != 40 {
+		t.Fatalf("expected chunk_duration 40, got %v", paramMap["chunk_duration"])
+	}
+	if paramMap["chunking"] != false {
+		t.Fatalf("expected chunking false, got %v", paramMap["chunking"])
+	}
+	if paramMap["precision"] != "float16" {
+		t.Fatalf("expected precision float16, got %v", paramMap["precision"])
 	}
 }
 

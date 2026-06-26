@@ -118,6 +118,15 @@ func NewCanaryAdapter(envPath string) *CanaryAdapter {
 			Description: "Automatically convert audio to 16kHz mono WAV",
 			Group:       "advanced",
 		},
+		{
+			Name:        "device",
+			Type:        "string",
+			Required:    false,
+			Default:     "auto",
+			Options:     []string{"auto", "cuda", "cpu"},
+			Description: "Device for inference",
+			Group:       "advanced",
+		},
 
 		// Performance settings
 		{
@@ -128,6 +137,33 @@ func NewCanaryAdapter(envPath string) *CanaryAdapter {
 			Min:         &[]float64{1}[0],
 			Max:         &[]float64{8}[0],
 			Description: "Batch size for processing (higher uses more memory)",
+			Group:       "advanced",
+		},
+		{
+			Name:        "chunking",
+			Type:        "bool",
+			Required:    false,
+			Default:     false,
+			Description: "Split long audio into chunks to reduce VRAM usage",
+			Group:       "advanced",
+		},
+		{
+			Name:        "chunk_duration",
+			Type:        "int",
+			Required:    false,
+			Default:     40,
+			Min:         &[]float64{10}[0],
+			Max:         &[]float64{300}[0],
+			Description: "Audio chunk length in seconds. Smaller chunks use less VRAM.",
+			Group:       "advanced",
+		},
+		{
+			Name:        "precision",
+			Type:        "string",
+			Required:    false,
+			Default:     "float16",
+			Options:     []string{"float16", "bfloat16", "float32"},
+			Description: "Model precision",
 			Group:       "advanced",
 		},
 
@@ -416,7 +452,18 @@ func (c *CanaryAdapter) buildCanaryArgs(input interfaces.AudioInput, params map[
 		args = append(args, "--no-timestamps")
 	}
 
-	args = append(args, "--batch-size", strconv.Itoa(c.GetIntParameter(params, "batch_size")))
+	args = append(args,
+		"--batch-size", strconv.Itoa(c.GetIntParameter(params, "batch_size")),
+		"--chunk-len", strconv.Itoa(c.GetIntParameter(params, "chunk_duration")),
+		"--device", c.GetStringParameter(params, "device"),
+		"--precision", c.GetStringParameter(params, "precision"),
+	)
+
+	if c.GetBoolParameter(params, "chunking") {
+		args = append(args, "--chunking")
+	} else {
+		args = append(args, "--no-chunking")
+	}
 
 	// Add confidence flag
 	if c.GetBoolParameter(params, "include_confidence") {

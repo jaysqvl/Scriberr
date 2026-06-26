@@ -197,18 +197,34 @@ export function SelectField({ label, description, optional, value, onValueChange
 /**
  * SwitchField - Switch toggle with label in a consistent layout.
  */
-export function SwitchField({ id, label, checked, onCheckedChange }: {
+export function SwitchField({ id, label, description, checked, onCheckedChange }: {
     id: string;
     label: string;
+    description?: string;
     checked: boolean;
     onCheckedChange: (checked: boolean) => void;
 }) {
     return (
         <div className="flex items-center gap-3">
             <Switch id={id} checked={checked} onCheckedChange={onCheckedChange} />
-            <label htmlFor={id} className="text-sm text-[var(--text-primary)] cursor-pointer">
-                {label}
-            </label>
+            <div className="flex items-center gap-2">
+                <label htmlFor={id} className="text-sm text-[var(--text-primary)] cursor-pointer">
+                    {label}
+                </label>
+                {description && (
+                    <HoverCard>
+                        <HoverCardTrigger asChild>
+                            <Info className="h-4 w-4 text-[var(--text-tertiary)] cursor-help hover:text-[var(--text-secondary)] transition-colors" />
+                        </HoverCardTrigger>
+                        <HoverCardContent
+                            className="w-80 bg-[var(--bg-card)] border border-[var(--border-subtle)] rounded-xl p-4"
+                            style={{ boxShadow: 'var(--shadow-float)' }}
+                        >
+                            <p className="text-sm text-[var(--text-secondary)] leading-relaxed">{description}</p>
+                        </HoverCardContent>
+                    </HoverCard>
+                )}
+            </div>
         </div>
     );
 }

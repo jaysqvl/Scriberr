@@ -639,6 +639,10 @@ func (u *UnifiedTranscriptionService) convertToCanaryParams(params models.Whispe
 		"auto_convert_audio": true,
 		"task":               params.Task,
 		"batch_size":         nvidiaBatchSize(params.BatchSize),
+		"chunking":           nvidiaBoolDefault(params.NvidiaUseChunking, false),
+		"chunk_duration":     nvidiaChunkDuration(params, 40),
+		"device":             nvidiaStringDefault(params.Device, "auto"),
+		"precision":          nvidiaStringDefault(params.NvidiaPrecision, "float16"),
 	}
 
 	// Set source language
@@ -695,6 +699,13 @@ func nvidiaTimestamps(params models.WhisperXParams) bool {
 		return true
 	}
 	return *params.NvidiaTimestamps
+}
+
+func nvidiaBoolDefault(value *bool, fallback bool) bool {
+	if value == nil {
+		return fallback
+	}
+	return *value
 }
 
 func nvidiaBatchSize(batchSize int) int {

@@ -19,6 +19,10 @@ func TestCanaryArgsPassBatchSizeAndTimestampDisable(t *testing.T) {
 		"task":                "transcribe",
 		"timestamps":          false,
 		"batch_size":          2,
+		"chunking":            true,
+		"chunk_duration":      30,
+		"device":              "cuda",
+		"precision":           "float16",
 		"include_confidence":  true,
 		"preserve_formatting": true,
 	}, tempDir)
@@ -27,8 +31,13 @@ func TestCanaryArgsPassBatchSizeAndTimestampDisable(t *testing.T) {
 	}
 
 	assertArgValue(t, args, "--batch-size", "2")
+	assertArgValue(t, args, "--chunk-len", "30")
+	assertArgValue(t, args, "--device", "cuda")
+	assertArgValue(t, args, "--precision", "float16")
+	assertContainsArg(t, args, "--chunking")
 	assertContainsArg(t, args, "--no-timestamps")
 	assertNotContainsArg(t, args, "--timestamps")
+	assertNotContainsArg(t, args, "--no-chunking")
 }
 
 func TestParakeetArgsPassBatchSizeAndTimestampDisable(t *testing.T) {

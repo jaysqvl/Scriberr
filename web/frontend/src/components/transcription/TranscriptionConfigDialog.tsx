@@ -75,6 +75,7 @@ export interface WhisperXParams {
     nvidia_target_language?: string;
     nvidia_precision: string;
     nvidia_prompt?: string;
+    nvidia_use_chunking?: boolean;
     is_multi_track_enabled: boolean;
     api_key?: string;
     max_new_tokens?: number;
@@ -137,6 +138,7 @@ const DEFAULT_PARAMS: WhisperXParams = {
     nvidia_target_language: "en",
     nvidia_precision: "float16",
     nvidia_prompt: "",
+    nvidia_use_chunking: false,
     is_multi_track_enabled: false,
     api_key: "",
 };
@@ -227,26 +229,27 @@ const CANARY_QWEN_LANGUAGES = [
 ];
 
 const PARAM_DESCRIPTIONS = {
-    model: "Size of the Whisper model. Larger = more accurate but slower.",
-    language: "Source language. Auto-detect works for most cases.",
-    task: "Transcribe in original language or translate to English.",
-    device: "CPU (universal), GPU (faster, CUDA required), or AUTO.",
-    compute_type: "Float16 (faster), Float32 (accurate), Int8 (fastest).",
-    batch_size: "Segments processed at once. Higher = faster but more memory.",
-    diarize: "Identify and separate different speakers.",
-    diarize_model: "Pyannote (accurate, needs HF token) or NVIDIA Sortformer (up to 4 speakers).",
-    temperature: "0 = deterministic, higher = more creative.",
-    beam_size: "Search beams. Higher = better quality but slower.",
-    vad_method: "Voice detection: Pyannote (accurate) or Silero (fast).",
-    initial_prompt: "Context text to guide transcription style.",
-    hf_token: "Required for Pyannote diarization models.",
-    vad_onset: "Voice detection sensitivity. Lower values (0.3-0.4) catch quieter/distant speakers.",
-    vad_offset: "Speech ending sensitivity. Lower values detect speech endings more precisely.",
-    nvidia_chunk_duration: "Audio chunk length sent to the NVIDIA model. Smaller chunks use less VRAM.",
-    nvidia_timestamps: "Request timestamp output when the NVIDIA model supports it.",
-    nvidia_precision: "Lower precision reduces VRAM usage on supported GPUs.",
-    nvidia_prompt: "Prompt used by Canary-Qwen for transcription generation.",
-    max_new_tokens: "Maximum tokens generated for each audio chunk.",
+    model: "For Whisper, start with small or medium. Use large-v3 when quality matters more than speed and you have enough VRAM.",
+    language: "Pick the known language when you can. Auto-detect is convenient but can misread short, noisy, or multilingual clips.",
+    task: "Use transcribe for same-language output. Use translate only when you want the model to produce another supported language.",
+    device: "Use Auto for normal GPU hosts. Force GPU (CUDA) to fail fast if CUDA is missing; choose CPU only for debugging or when VRAM is unavailable.",
+    compute_type: "For Whisper on NVIDIA GPUs, float16 is the usual speed/quality choice. Use int8 to save VRAM; use float32 mostly for CPU or troubleshooting.",
+    batch_size: "Higher can be faster but costs VRAM. On a 12GB RTX 3060, use 1 for Canary/Canary-Qwen, 1-2 for Parakeet, and raise only after a clean run.",
+    diarize: "Adds speaker labels but uses more time and memory. Leave off while debugging model/VRAM failures.",
+    diarize_model: "Pyannote is usually stronger but needs a Hugging Face token. Sortformer is local/NVIDIA and best when you expect up to four speakers.",
+    temperature: "Keep 0 for repeatable transcripts. Raise only if Whisper gets stuck or repeats text.",
+    beam_size: "Higher can improve Whisper decoding but slows it down. 5 is a good default; 1 is faster and lighter.",
+    vad_method: "Voice detection affects segmentation before transcription. Pyannote is usually better; Silero is lighter when available.",
+    initial_prompt: "Optional spelling, names, acronyms, or domain context. Keep it short and factual.",
+    hf_token: "Needed for gated Pyannote diarization models. It is only sent to the backend for model access.",
+    vad_onset: "Lower values catch quieter speech but may include noise. Try 0.35-0.45 for distant audio; 0.5 is a balanced default.",
+    vad_offset: "Lower values end speech segments sooner. Try 0.25-0.35 for rapid dialogue; higher values keep pauses attached.",
+    nvidia_chunk_duration: "When chunking is enabled, smaller chunks reduce peak VRAM but can lose long-range context. Try 20-40s on 12GB for Canary failures; use longer chunks when memory allows.",
+    nvidia_timestamps: "Timestamps increase work and memory. Disable them for the first troubleshooting run, then re-enable if the model is stable.",
+    nvidia_precision: "float16 usually saves VRAM on NVIDIA GPUs. bfloat16 can work on newer GPUs; float32 uses much more VRAM and is mainly for CPU/debugging.",
+    nvidia_use_chunking: "Native mode keeps full-file context but can OOM on long audio. Enable chunking for long files or 12GB GPUs when Canary fails.",
+    nvidia_prompt: "Canary-Qwen prompt. Keep the audio locator implicit and use short instructions like names, style, or vocabulary.",
+    max_new_tokens: "For Canary-Qwen, this caps generated text per chunk. 256 is safe; lower it for memory/debugging, raise it only if chunks are cut off.",
 };
 
 // ============================================================================
@@ -301,6 +304,7 @@ export const TranscriptionConfigDialog = memo(function TranscriptionConfigDialog
                     newParams.batch_size = 8;
                     newParams.nvidia_chunk_duration = 300;
                     newParams.nvidia_timestamps = true;
+                    newParams.nvidia_use_chunking = false;
                 } else if (family === 'nvidia_parakeet') {
                     newParams.device = 'auto';
                     newParams.task = 'transcribe';
@@ -311,15 +315,17 @@ export const TranscriptionConfigDialog = memo(function TranscriptionConfigDialog
                     newParams.attention_context_left = 256;
                     newParams.attention_context_right = 256;
                     newParams.nvidia_precision = 'float16';
+                    newParams.nvidia_use_chunking = false;
                 } else if (family === 'nvidia_canary') {
                     newParams.device = 'auto';
                     newParams.task = 'transcribe';
                     newParams.language = newParams.language || 'en';
                     newParams.batch_size = 1;
-                    newParams.nvidia_chunk_duration = 300;
+                    newParams.nvidia_chunk_duration = 40;
                     newParams.nvidia_timestamps = true;
                     newParams.nvidia_target_language = 'en';
                     newParams.nvidia_precision = 'float16';
+                    newParams.nvidia_use_chunking = false;
                 } else if (family === 'nvidia_canary_qwen') {
                     newParams.device = 'auto';
                     newParams.task = 'transcribe';
@@ -330,6 +336,7 @@ export const TranscriptionConfigDialog = memo(function TranscriptionConfigDialog
                     newParams.nvidia_precision = 'float16';
                     newParams.max_new_tokens = 256;
                     newParams.nvidia_prompt = 'Transcribe the following:';
+                    newParams.nvidia_use_chunking = true;
                 }
             }
             return newParams;
@@ -514,12 +521,13 @@ function DiarizationSection({ id, params, updateParam, description }: {
     return (
         <Section title="Speaker Diarization" description={description}>
             <div className="space-y-4">
-                <SwitchField id={id} label="Enable speaker identification" checked={params.diarize} onCheckedChange={(v) => updateParam('diarize', v)} />
+                <SwitchField id={id} label="Enable speaker identification" description={PARAM_DESCRIPTIONS.diarize} checked={params.diarize} onCheckedChange={(v) => updateParam('diarize', v)} />
 
                 {params.diarize && (
                     <div className="p-4 bg-[var(--bg-main)] rounded-xl border border-[var(--border-subtle)] space-y-4">
                         <SelectField
                             label="Diarization Model"
+                            description={PARAM_DESCRIPTIONS.diarize_model}
                             value={params.diarize_model}
                             onValueChange={(v) => updateParam('diarize_model', v)}
                             options={[
@@ -638,10 +646,10 @@ function WhisperConfig({ params, updateParam, isMultiTrack }: ConfigProps) {
                     />
                 </FormField>
 
-                <SwitchField id="suppress_numerals" label="Suppress numerals (write numbers as words)" checked={params.suppress_numerals} onCheckedChange={(v) => updateParam('suppress_numerals', v)} />
+                <SwitchField id="suppress_numerals" label="Suppress numerals (write numbers as words)" description="Useful for readable prose. Leave off when exact numeric output matters for timestamps, measurements, prices, or identifiers." checked={params.suppress_numerals} onCheckedChange={(v) => updateParam('suppress_numerals', v)} />
 
                 <div className="pt-2 border-t border-[var(--border-subtle)] space-y-4">
-                    <SwitchField id="no_align" label="Skip word alignment (faster, less precise timestamps)" checked={params.no_align} onCheckedChange={(v) => updateParam('no_align', v)} />
+                    <SwitchField id="no_align" label="Skip word alignment (faster, less precise timestamps)" description="Turn on to save time/VRAM or debug failures. Leave off when you need word-level timing." checked={params.no_align} onCheckedChange={(v) => updateParam('no_align', v)} />
 
                     {!params.no_align && (
                         <FormField label="Custom Alignment Model" description="WhisperX-compatible alignment model (e.g., KBLab/wav2vec2-large-voxrex-swedish). Leave empty for default." optional>
@@ -695,6 +703,7 @@ function ParakeetConfig({ params, updateParam, isMultiTrack }: ConfigProps) {
                 <SwitchField
                     id="parakeet_timestamps"
                     label="Timestamp output"
+                    description={PARAM_DESCRIPTIONS.nvidia_timestamps}
                     checked={params.nvidia_timestamps ?? true}
                     onCheckedChange={(v) => updateParam('nvidia_timestamps', v)}
                 />
@@ -708,10 +717,10 @@ function CanaryConfig({ params, updateParam, isMultiTrack }: ConfigProps) {
         <div className="space-y-6">
             <Section title="Language Settings">
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <SelectField label="Task" value={params.task} onValueChange={(v) => updateParam('task', v)} options={[{ value: "transcribe", label: "Transcribe" }, { value: "translate", label: "Translate" }]} />
-                    <SelectField label="Source Language" value={params.language || "en"} onValueChange={(v) => updateParam('language', v)} options={CANARY_LANGUAGES} />
+                    <SelectField label="Task" description={PARAM_DESCRIPTIONS.task} value={params.task} onValueChange={(v) => updateParam('task', v)} options={[{ value: "transcribe", label: "Transcribe" }, { value: "translate", label: "Translate" }]} />
+                    <SelectField label="Source Language" description={PARAM_DESCRIPTIONS.language} value={params.language || "en"} onValueChange={(v) => updateParam('language', v)} options={CANARY_LANGUAGES} />
                     {params.task === "translate" && (
-                        <SelectField label="Target Language" value={params.nvidia_target_language || "en"} onValueChange={(v) => updateParam('nvidia_target_language', v)} options={CANARY_LANGUAGES} />
+                        <SelectField label="Target Language" description={PARAM_DESCRIPTIONS.task} value={params.nvidia_target_language || "en"} onValueChange={(v) => updateParam('nvidia_target_language', v)} options={CANARY_LANGUAGES} />
                     )}
                 </div>
             </Section>
@@ -721,17 +730,51 @@ function CanaryConfig({ params, updateParam, isMultiTrack }: ConfigProps) {
             )}
 
             <AdvancedAccordion>
-                <FormField label="Batch Size" description={PARAM_DESCRIPTIONS.batch_size}>
-                    <Input
-                        type="number" min={1} max={8}
-                        value={params.batch_size}
-                        onChange={(e) => updateParam('batch_size', parseInt(e.target.value) || 1)}
-                        className={inputClassName}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <SelectField
+                        label="Device"
+                        description={PARAM_DESCRIPTIONS.device}
+                        value={params.device || "auto"}
+                        onValueChange={(v) => updateParam('device', v)}
+                        options={[{ value: "auto", label: "Auto" }, { value: "cuda", label: "GPU (CUDA)" }, { value: "cpu", label: "CPU" }]}
                     />
-                </FormField>
+                    <SelectField
+                        label="Precision"
+                        description={PARAM_DESCRIPTIONS.nvidia_precision}
+                        value={params.nvidia_precision || "float16"}
+                        onValueChange={(v) => updateParam('nvidia_precision', v)}
+                        options={[{ value: "float16", label: "Float16" }, { value: "bfloat16", label: "BFloat16" }, { value: "float32", label: "Float32" }]}
+                    />
+                    <FormField label="Batch Size" description={PARAM_DESCRIPTIONS.batch_size}>
+                        <Input
+                            type="number" min={1} max={8}
+                            value={params.batch_size}
+                            onChange={(e) => updateParam('batch_size', parseInt(e.target.value) || 1)}
+                            className={inputClassName}
+                        />
+                    </FormField>
+                </div>
+                <SwitchField
+                    id="canary_chunking"
+                    label="Chunk long audio"
+                    description={PARAM_DESCRIPTIONS.nvidia_use_chunking}
+                    checked={params.nvidia_use_chunking ?? false}
+                    onCheckedChange={(v) => updateParam('nvidia_use_chunking', v)}
+                />
+                {(params.nvidia_use_chunking ?? false) && (
+                    <FormField label="Chunk Length" description={PARAM_DESCRIPTIONS.nvidia_chunk_duration}>
+                        <Input
+                            type="number" min={10} max={300} step={10}
+                            value={params.nvidia_chunk_duration || 40}
+                            onChange={(e) => updateParam('nvidia_chunk_duration', parseInt(e.target.value) || 40)}
+                            className={inputClassName}
+                        />
+                    </FormField>
+                )}
                 <SwitchField
                     id="canary_timestamps"
                     label="Timestamp output"
+                    description={PARAM_DESCRIPTIONS.nvidia_timestamps}
                     checked={params.nvidia_timestamps ?? true}
                     onCheckedChange={(v) => updateParam('nvidia_timestamps', v)}
                 />
@@ -809,6 +852,7 @@ function CanaryQwenConfig({ params, updateParam, isMultiTrack }: ConfigProps) {
                 <SwitchField
                     id="canary_qwen_timestamps"
                     label="Chunk timestamp output"
+                    description={PARAM_DESCRIPTIONS.nvidia_timestamps}
                     checked={params.nvidia_timestamps ?? true}
                     onCheckedChange={(v) => updateParam('nvidia_timestamps', v)}
                 />

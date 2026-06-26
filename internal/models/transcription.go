@@ -124,6 +124,7 @@ type WhisperXParams struct {
 	NvidiaTargetLanguage  *string `json:"nvidia_target_language,omitempty" gorm:"type:varchar(10)"`
 	NvidiaPrecision       string  `json:"nvidia_precision" gorm:"type:varchar(20);default:'float16'"`
 	NvidiaPrompt          *string `json:"nvidia_prompt,omitempty" gorm:"type:text"`
+	NvidiaUseChunking     *bool   `json:"nvidia_use_chunking,omitempty" gorm:"type:boolean"`
 
 	// Multi-track transcription settings
 	IsMultiTrackEnabled bool `json:"is_multi_track_enabled" gorm:"type:boolean;default:false"`

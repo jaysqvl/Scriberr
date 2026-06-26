@@ -161,6 +161,9 @@ function CuratedParamsDisplay({ params }: { params: any }) {
         specificKeys = [
             'nvidia_target_language',
             'nvidia_timestamps',
+            'nvidia_use_chunking',
+            'nvidia_chunk_duration',
+            'nvidia_precision',
             ...(params.diarize ? ['diarize_model'] : [])
         ];
     } else if (params.model_family === 'nvidia_canary_qwen') {
