@@ -6,16 +6,21 @@ import {
     DialogDescription,
 } from "@/components/ui/dialog";
 import { FileText } from "lucide-react";
-import { useLogs } from "@/features/transcription/hooks/useAudioDetail";
+import { useLogs, useRunLogs } from "@/features/transcription/hooks/useAudioDetail";
 
 interface LogsDialogProps {
     audioId: string;
+    runId?: string;
+    runLabel?: string;
     isOpen: boolean;
     onClose: (open: boolean) => void;
 }
 
-export function LogsDialog({ audioId, isOpen, onClose }: LogsDialogProps) {
-    const { data: logsContent, isLoading } = useLogs(audioId);
+export function LogsDialog({ audioId, runId, runLabel, isOpen, onClose }: LogsDialogProps) {
+    const { data: jobLogsContent, isLoading: jobLogsLoading } = useLogs(audioId, isOpen && !runId);
+    const { data: runLogsContent, isLoading: runLogsLoading } = useRunLogs(audioId, runId, isOpen && !!runId);
+    const logsContent = runId ? runLogsContent : jobLogsContent;
+    const isLoading = runId ? runLogsLoading : jobLogsLoading;
 
     return (
         <Dialog open={isOpen} onOpenChange={onClose}>
@@ -23,10 +28,10 @@ export function LogsDialog({ audioId, isOpen, onClose }: LogsDialogProps) {
                 <DialogHeader className="border-b border-[var(--border-subtle)] pb-4">
                     <DialogTitle className="text-[var(--text-primary)] flex items-center gap-2 text-xl font-bold tracking-tight">
                         <FileText className="h-5 w-5 text-[var(--brand-solid)]" />
-                        Transcription Logs
+                        {runLabel ? `${runLabel} Logs` : "Transcription Logs"}
                     </DialogTitle>
                     <DialogDescription className="text-[var(--text-secondary)]">
-                        System output and processing events.
+                        System output and processing events for {runLabel || "this transcription"}.
                     </DialogDescription>
                 </DialogHeader>
 
@@ -38,7 +43,7 @@ export function LogsDialog({ audioId, isOpen, onClose }: LogsDialogProps) {
                         </div>
                     ) : logsContent?.available === false ? (
                         <div className="py-12 text-center text-[var(--text-tertiary)]">
-                            No logs available for this transcription job.
+                            No logs available for {runLabel || "this transcription job"}.
                         </div>
                     ) : (
                         <pre className="bg-[#0A0A0A] text-[#EDEDED] p-4 rounded-[var(--radius-card)] overflow-x-auto text-xs sm:text-sm font-mono leading-relaxed whitespace-pre-wrap max-h-[60vh] overflow-y-auto border border-white/10 shadow-inner">

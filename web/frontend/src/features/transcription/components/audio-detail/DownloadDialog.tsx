@@ -11,7 +11,7 @@ import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Sparkles, Download, Check } from "lucide-react";
 import { useState } from "react";
-import { useTranscript, useAudioDetail } from "@/features/transcription/hooks/useAudioDetail";
+import { useTranscript, useAudioDetail, type Transcript } from "@/features/transcription/hooks/useAudioDetail";
 import { useSpeakerMappings } from "@/features/transcription/hooks/useTranscriptionSpeakers";
 import { useTranscriptDownload } from "@/features/transcription/hooks/useTranscriptDownload";
 
@@ -20,13 +20,16 @@ interface DownloadDialogProps {
     isOpen: boolean;
     onClose: (open: boolean) => void;
     initialFormat?: 'txt' | 'json';
+    transcriptOverride?: Transcript | null;
+    filenameSuffix?: string;
 }
 
-export function DownloadDialog({ audioId, isOpen, onClose, initialFormat = 'txt' }: DownloadDialogProps) {
-    const { data: transcript } = useTranscript(audioId, true);
+export function DownloadDialog({ audioId, isOpen, onClose, initialFormat = 'txt', transcriptOverride, filenameSuffix }: DownloadDialogProps) {
+    const { data: fetchedTranscript } = useTranscript(audioId, isOpen && transcriptOverride === undefined);
     const { data: audioFile } = useAudioDetail(audioId);
     const { data: speakerMappings = {} } = useSpeakerMappings(audioId, true);
     const { downloadTXT, downloadJSON } = useTranscriptDownload();
+    const transcript = transcriptOverride === undefined ? fetchedTranscript : transcriptOverride;
 
     const [includeSpeakerLabels, setIncludeSpeakerLabels] = useState(true);
     const [includeTimestamps, setIncludeTimestamps] = useState(true);
@@ -39,7 +42,7 @@ export function DownloadDialog({ audioId, isOpen, onClose, initialFormat = 'txt'
             const name = audioFile.title || audioFile.audio_path.split("/").pop() || "transcript";
             return name.replace(/\.[^/.]+$/, '');
         };
-        const filenameBase = getFileNameWithoutExt();
+        const filenameBase = [getFileNameWithoutExt(), filenameSuffix].filter(Boolean).join("-");
 
         if (initialFormat === 'txt') {
             downloadTXT(transcript, filenameBase, speakerMappings, { includeSpeakerLabels, includeTimestamps });

@@ -24,6 +24,7 @@ import (
 	"scriberr/internal/service"
 	"scriberr/internal/sse"
 	"scriberr/internal/transcription"
+	appversion "scriberr/internal/version"
 	"scriberr/pkg/logger"
 
 	"github.com/gin-gonic/gin"
@@ -1985,7 +1986,9 @@ func (h *Handler) GetSupportedModels(c *gin.Context) {
 func (h *Handler) HealthCheck(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"status":  "healthy",
-		"version": "1.0.0",
+		"version": appversion.Version,
+		"commit":  appversion.Commit,
+		"built":   appversion.Date,
 	})
 }
 

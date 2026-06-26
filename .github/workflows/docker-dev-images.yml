@@ -73,6 +73,7 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           REF_NAME: ${{ github.ref_name }}
+          RUN_STARTED_AT: ${{ github.run_started_at }}
           INPUT_SOURCE_REPOSITORY: ${{ github.event.inputs.source_repository }}
           INPUT_UPSTREAM_REF: ${{ github.event.inputs.upstream_ref }}
           INPUT_IMAGE_CHANNEL: ${{ github.event.inputs.image_channel }}
@@ -103,6 +104,7 @@ jobs:
             echo "image_channel=$image_channel"
             echo "variants=$variants"
             echo "publish_latest=$publish_latest"
+            echo "build_date=${RUN_STARTED_AT:-unknown}"
           } >> "$GITHUB_OUTPUT"
 
       - name: Check selected variant
@@ -184,6 +186,10 @@ jobs:
           platforms: linux/amd64
           push: true
           tags: ${{ steps.tags.outputs.tags }}
+          build-args: |
+            VERSION=${{ steps.settings.outputs.image_channel }}
+            COMMIT=${{ steps.source.outputs.sha }}
+            DATE=${{ steps.settings.outputs.build_date }}
           labels: |
             org.opencontainers.image.title=Scriberr
             org.opencontainers.image.source=https://github.com/${{ steps.settings.outputs.source_repository }}

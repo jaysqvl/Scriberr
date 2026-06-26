@@ -27,6 +27,7 @@ export function Settings() {
   const [editingSummary, setEditingSummary] = useState<SummaryTemplate | null>(null);
   const [summaryRefresh, setSummaryRefresh] = useState(0);
   const [llmConfigured, setLlmConfigured] = useState(false);
+  const [appInfo, setAppInfo] = useState<{ version?: string; commit?: string; built?: string } | null>(null);
 
   // Fetch LLM config and models
   useEffect(() => {
@@ -46,6 +47,19 @@ export function Settings() {
     };
     fetchLLM();
   }, [activeTab, getAuthHeaders]);
+
+  useEffect(() => {
+    const fetchAppInfo = async () => {
+      try {
+        const response = await fetch('/health');
+        if (!response.ok) return;
+        setAppInfo(await response.json());
+      } catch {
+        setAppInfo(null);
+      }
+    };
+    fetchAppInfo();
+  }, []);
 
   return (
     <MainLayout
@@ -195,6 +209,16 @@ export function Settings() {
             <CLISettingsTab />
           </TabsContent>
         </Tabs>
+
+        <div className="mt-6 border-t border-[var(--border-subtle)] pt-4 text-xs text-[var(--text-tertiary)]">
+          Scriberr {appInfo?.version || "unknown"}
+          {appInfo?.commit && appInfo.commit !== "none" && (
+            <span> · {appInfo.commit.slice(0, 12)}</span>
+          )}
+          {appInfo?.built && appInfo.built !== "unknown" && (
+            <span> · built {new Date(appInfo.built).toLocaleString()}</span>
+          )}
+        </div>
       </div>
     </MainLayout>
   );

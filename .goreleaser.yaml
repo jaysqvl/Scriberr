@@ -32,9 +32,9 @@ builds:
     # Build flags
     ldflags:
       - -s -w
-      - -X main.version={{ .Version }}
-      - -X main.commit={{ .Commit }}
-      - -X main.date={{ .Date }}
+      - -X scriberr/internal/version.Version={{ .Version }}
+      - -X scriberr/internal/version.Commit={{ .Commit }}
+      - -X scriberr/internal/version.Date={{ .Date }}
 
 # Archive configuration
 archives:

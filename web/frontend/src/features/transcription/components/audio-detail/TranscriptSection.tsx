@@ -4,7 +4,6 @@ import { useQueryClient } from "@tanstack/react-query";
 import { TranscriptView } from "@/components/transcript/TranscriptView";
 import { useNotes, useCreateNote, useUpdateNote, useDeleteNote } from "@/features/transcription/hooks/useTranscriptionNotes";
 import { useSelectionMenu } from "@/features/transcription/hooks/useSelectionMenu";
-import { DownloadDialog } from "./DownloadDialog";
 import SpeakerRenameDialog from "./SpeakerRenameDialog";
 import { NotesSidebar } from "./NotesSidebar";
 import { TranscriptSelectionMenu } from "./TranscriptSelectionMenu";
@@ -31,9 +30,6 @@ interface TranscriptSectionProps {
     setNotesOpen: (open: boolean) => void;
     speakerRenameOpen: boolean;
     setSpeakerRenameOpen: (open: boolean) => void;
-    downloadDialogOpen: boolean;
-    setDownloadDialogOpen: (open: boolean) => void;
-    downloadFormat: 'txt' | 'json';
 }
 
 export function TranscriptSection({
@@ -50,9 +46,6 @@ export function TranscriptSection({
     setNotesOpen,
     speakerRenameOpen,
     setSpeakerRenameOpen,
-    downloadDialogOpen,
-    setDownloadDialogOpen,
-    downloadFormat,
     className
 }: TranscriptSectionProps & { className?: string }) {
     const isMobile = useIsMobile();
@@ -199,14 +192,6 @@ export function TranscriptSection({
                     </div>
                 </div>
             </div>
-
-            {/* Download Dialog */}
-            <DownloadDialog
-                audioId={audioId}
-                isOpen={downloadDialogOpen}
-                onClose={setDownloadDialogOpen}
-                initialFormat={downloadFormat}
-            />
 
             {/* Speaker Rename Dialog */}
             <SpeakerRenameDialog

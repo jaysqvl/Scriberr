@@ -236,7 +236,7 @@ export function useRunLogs(audioId: string, runId?: string, enabled = true) {
     });
 }
 
-export function useLogs(audioId: string) {
+export function useLogs(audioId: string, enabled = true) {
     const { getAuthHeaders } = useAuth();
     return useQuery({
         queryKey: ["logs", audioId],
@@ -247,7 +247,7 @@ export function useLogs(audioId: string) {
             if (!response.ok) throw new Error("Failed to fetch logs");
             return response.json() as Promise<LogsData>;
         },
-        enabled: !!audioId,
+        enabled: enabled && !!audioId,
     });
 }
 

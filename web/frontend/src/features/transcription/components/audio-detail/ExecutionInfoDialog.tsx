@@ -31,9 +31,10 @@ interface ExecutionInfoDialogProps {
     audioId: string;
     isOpen: boolean;
     onClose: (open: boolean) => void;
+    initialRunId?: string;
 }
 
-export function ExecutionInfoDialog({ audioId, isOpen, onClose }: ExecutionInfoDialogProps) {
+export function ExecutionInfoDialog({ audioId, isOpen, onClose, initialRunId }: ExecutionInfoDialogProps) {
     const { data: runsData, isLoading } = useExecutionRuns(audioId, isOpen);
     const runs = useMemo(() => runsData?.runs || [], [runsData?.runs]);
     const [selectedRunId, setSelectedRunId] = useState<string | undefined>();
@@ -42,9 +43,11 @@ export function ExecutionInfoDialog({ audioId, isOpen, onClose }: ExecutionInfoD
         if (!isOpen || runs.length === 0) return;
         const selectedStillExists = selectedRunId && runs.some((run) => run.id === selectedRunId);
         if (!selectedStillExists) {
-            setSelectedRunId(runsData?.active_run_id || runs[0].id);
+            setSelectedRunId(initialRunId || runsData?.active_run_id || runs[0].id);
+        } else if (initialRunId && selectedRunId !== initialRunId && runs.some((run) => run.id === initialRunId)) {
+            setSelectedRunId(initialRunId);
         }
-    }, [isOpen, runs, runsData?.active_run_id, selectedRunId]);
+    }, [initialRunId, isOpen, runs, runsData?.active_run_id, selectedRunId]);
 
     const selectedRun = useMemo(
         () => runs.find((run) => run.id === selectedRunId) || runs[0],

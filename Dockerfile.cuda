@@ -22,6 +22,9 @@ RUN cd frontend \
 ########################
 FROM golang:1.24-bookworm AS go-builder
 WORKDIR /src
+ARG VERSION=dev
+ARG COMMIT=none
+ARG DATE=unknown
 
 # Pre-cache modules
 COPY go.mod go.sum ./
@@ -36,7 +39,7 @@ COPY --from=ui-builder /web/frontend/dist internal/web/dist
 
 # Build binary (arch matches builder platform)
 RUN CGO_ENABLED=0 \
-  go build -o /out/scriberr cmd/server/main.go
+  go build -ldflags "-s -w -X scriberr/internal/version.Version=${VERSION} -X scriberr/internal/version.Commit=${COMMIT} -X scriberr/internal/version.Date=${DATE}" -o /out/scriberr cmd/server/main.go
 # Build CLI binaries (cross-platform)
 RUN mkdir -p /out/bin/cli \
   && GOOS=linux GOARCH=amd64 go build -o /out/bin/cli/scriberr-linux-amd64 ./cmd/scriberr-cli \

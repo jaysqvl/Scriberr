@@ -1,8 +1,8 @@
-import { useRef, useState, useEffect, useCallback } from "react";
+import { useRef, useState, useEffect, useCallback, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
-import { MoreVertical, Edit2, Activity, FileText, Bot, Check, Loader2, List, AlignLeft, ArrowDownCircle, StickyNote, MessageCircle, FileImage, FileJson, Clock, AlertCircle, Users, RefreshCw } from "lucide-react";
+import { MoreVertical, Edit2, Activity, Bot, Check, Loader2, List, AlignLeft, ArrowDownCircle, StickyNote, MessageCircle, Clock, AlertCircle, Users, RefreshCw } from "lucide-react";
 import { Header } from "@/components/Header";
 
 import { Button } from "@/components/ui/button";
@@ -13,7 +13,7 @@ import { EmberPlayer, type EmberPlayerRef } from "@/components/audio/EmberPlayer
 import { cn } from "@/lib/utils";
 
 // Custom Hooks
-import { useAudioDetail, useExecutionRuns, useUpdateTitle, useTranscript, type TranscriptSegment } from "@/features/transcription/hooks/useAudioDetail";
+import { useAudioDetail, useExecutionRuns, useRunTranscript, useUpdateTitle, useTranscript, type ExecutionRun, type Transcript, type TranscriptSegment } from "@/features/transcription/hooks/useAudioDetail";
 import { useSpeakerMappings } from "@/features/transcription/hooks/useTranscriptionSpeakers";
 import { useTranscriptDownload } from "@/features/transcription/hooks/useTranscriptDownload";
 import { useAuth } from "@/features/auth/hooks/useAuth";
@@ -24,7 +24,9 @@ import { TranscriptSection } from "./audio-detail/TranscriptSection";
 import { ExecutionInfoDialog } from "./audio-detail/ExecutionInfoDialog";
 import { LogsDialog } from "./audio-detail/LogsDialog";
 import { SummaryDialog } from "./audio-detail/SummaryDialog";
+import { DownloadDialog } from "./audio-detail/DownloadDialog";
 import { ChatSidePanel } from "./ChatSidePanel";
+import { RunWorkspace } from "./audio-detail/RunWorkspace";
 import { useIsMobile } from "@/hooks/use-mobile";
 
 // Types
@@ -55,20 +57,32 @@ export const AudioDetailView = function AudioDetailView({ audioId: propAudioId }
     const [speakerRenameOpen, setSpeakerRenameOpen] = useState(false);
     const [downloadDialogOpen, setDownloadDialogOpen] = useState(false);
     const [downloadFormat, setDownloadFormat] = useState<'txt' | 'json'>('txt');
+    const [downloadTranscript, setDownloadTranscript] = useState<Transcript | null>(null);
+    const [downloadFilenameSuffix, setDownloadFilenameSuffix] = useState<string | undefined>();
 
     // Dialog States
     const [executionDialogOpen, setExecutionDialogOpen] = useState(false);
+    const [executionDialogRunId, setExecutionDialogRunId] = useState<string | undefined>();
     const [logsDialogOpen, setLogsDialogOpen] = useState(false);
+    const [logsDialogRunId, setLogsDialogRunId] = useState<string | undefined>();
     const [summaryDialogOpen, setSummaryDialogOpen] = useState(false);
     const [rerunDialogOpen, setRerunDialogOpen] = useState(false);
     const [rerunLoading, setRerunLoading] = useState(false);
+    const [selectedRunId, setSelectedRunId] = useState<string | undefined>();
+    const [compareRunId, setCompareRunId] = useState<string | undefined>();
+    const [runViewMode, setRunViewMode] = useState<"transcript" | "compare">("transcript");
 
     // Data Fetching
     const { data: audioFile, isLoading, error } = useAudioDetail(audioId || "");
     const { mutate: updateTitle } = useUpdateTitle(audioId || "");
     // Fetch transcript & speakers here to support menu actions
-    const { data: transcript } = useTranscript(audioId || "", true);
+    const { data: latestTranscript } = useTranscript(audioId || "", true);
     const { data: runsData } = useExecutionRuns(audioId || "", !!audioId);
+    const runs = useMemo(() => runsData?.runs || [], [runsData?.runs]);
+    const selectedRun = runs.find((run) => run.id === selectedRunId);
+    const { data: selectedRunTranscript, isLoading: selectedRunTranscriptLoading } = useRunTranscript(audioId || "", selectedRunId, !!selectedRunId);
+    const { data: compareRunTranscript, isLoading: compareRunTranscriptLoading } = useRunTranscript(audioId || "", compareRunId, runViewMode === "compare" && !!compareRunId);
+    const transcript = selectedRunId ? selectedRunTranscript : latestTranscript;
     const { data: speakerMappings = {} } = useSpeakerMappings(audioId || "", true);
 
     // Download Logic
@@ -121,6 +135,27 @@ export const AudioDetailView = function AudioDetailView({ audioId: propAudioId }
             setNewTitle(audioFile.title || "");
         }
     }, [audioFile]);
+
+    useEffect(() => {
+        if (runs.length === 0) {
+            setSelectedRunId(undefined);
+            setCompareRunId(undefined);
+            return;
+        }
+
+        const selectedStillExists = selectedRunId && runs.some((run) => run.id === selectedRunId);
+        if (!selectedStillExists) {
+            setSelectedRunId(runsData?.active_run_id || runs[0].id);
+        }
+    }, [runs, runsData?.active_run_id, selectedRunId]);
+
+    useEffect(() => {
+        if (runViewMode !== "compare" || runs.length < 2 || !selectedRunId) return;
+        const compareStillWorks = compareRunId && compareRunId !== selectedRunId && runs.some((run) => run.id === compareRunId);
+        if (!compareStillWorks) {
+            setCompareRunId(runs.find((run) => run.id !== selectedRunId)?.id);
+        }
+    }, [compareRunId, runViewMode, runs, selectedRunId]);
 
     // Handlers
     const handleTimeUpdate = useCallback((time: number) => {
@@ -183,6 +218,43 @@ export const AudioDetailView = function AudioDetailView({ audioId: propAudioId }
             setRerunLoading(false);
         }
     }, [audioId, audioFile, getAuthHeaders, queryClient]);
+
+    const getRunFilenameSuffix = useCallback((run?: ExecutionRun) => {
+        if (!run) return undefined;
+        const family = run.actual_parameters?.model_family || "run";
+        return `run-${run.run_number}-${family}`.replace(/[^a-zA-Z0-9_.-]+/g, "-").toLowerCase();
+    }, []);
+
+    const getFileNameWithoutExt = useCallback(() => {
+        const name = audioFile?.title || audioFile?.audio_path.split("/").pop() || "transcript";
+        return name.replace(/\.[^/.]+$/, "");
+    }, [audioFile]);
+
+    const handleRunDownload = useCallback((run: ExecutionRun, format: "srt" | "txt" | "json", runTranscript?: Transcript | null) => {
+        if (!runTranscript) return;
+        const filenameSuffix = getRunFilenameSuffix(run);
+        const filenameBase = [getFileNameWithoutExt(), filenameSuffix].filter(Boolean).join("-");
+
+        if (format === "srt") {
+            downloadSRT(runTranscript, filenameBase, speakerMappings);
+            return;
+        }
+
+        setDownloadFormat(format);
+        setDownloadTranscript(runTranscript);
+        setDownloadFilenameSuffix(filenameSuffix);
+        setDownloadDialogOpen(true);
+    }, [downloadSRT, getFileNameWithoutExt, getRunFilenameSuffix, speakerMappings]);
+
+    const handleOpenRunDetails = useCallback((runId?: string) => {
+        setExecutionDialogRunId(runId);
+        setExecutionDialogOpen(true);
+    }, []);
+
+    const handleOpenRunLogs = useCallback((runId?: string) => {
+        setLogsDialogRunId(runId);
+        setLogsDialogOpen(true);
+    }, []);
 
     if (!audioId) return <div>Invalid Audio ID</div>;
 
@@ -339,7 +411,7 @@ export const AudioDetailView = function AudioDetailView({ audioId: propAudioId }
                                             <Button
                                                 variant="outline"
                                                 size="sm"
-                                                onClick={() => setExecutionDialogOpen(true)}
+                                                onClick={() => handleOpenRunDetails(selectedRunId)}
                                                 className="rounded-full border-[var(--border-subtle)] shadow-sm bg-[var(--bg-card)] hover:bg-[var(--bg-main)] transition-all gap-2 px-3"
                                             >
                                                 <Activity className="h-4 w-4" />
@@ -408,16 +480,6 @@ export const AudioDetailView = function AudioDetailView({ audioId: propAudioId }
                                                         <Bot className="mr-2 h-4 w-4" /> AI Summary
                                                     </DropdownMenuItem>
                                                     <DropdownMenuSeparator className="bg-[var(--border-subtle)] my-1" />
-                                                    <DropdownMenuItem onClick={() => transcript && downloadSRT(transcript, audioFile?.title || 'transcript', speakerMappings)} className="rounded-[8px] cursor-pointer">
-                                                        <FileImage className="mr-2 h-4 w-4 opacity-70" /> Download SRT
-                                                    </DropdownMenuItem>
-                                                    <DropdownMenuItem onClick={() => { setDownloadFormat('txt'); setDownloadDialogOpen(true); }} className="rounded-[8px] cursor-pointer">
-                                                        <AlignLeft className="mr-2 h-4 w-4 opacity-70" /> Download Text
-                                                    </DropdownMenuItem>
-                                                    <DropdownMenuItem onClick={() => { setDownloadFormat('json'); setDownloadDialogOpen(true); }} className="rounded-[8px] cursor-pointer">
-                                                        <FileJson className="mr-2 h-4 w-4 opacity-70" /> Download JSON
-                                                    </DropdownMenuItem>
-                                                    <DropdownMenuSeparator className="bg-[var(--border-subtle)] my-1" />
                                                     <DropdownMenuItem
                                                         onClick={() => setRerunDialogOpen(true)}
                                                         disabled={audioFile.status === "processing" || audioFile.status === "pending"}
@@ -425,11 +487,8 @@ export const AudioDetailView = function AudioDetailView({ audioId: propAudioId }
                                                     >
                                                         <RefreshCw className="mr-2 h-4 w-4 opacity-70" /> Run Again
                                                     </DropdownMenuItem>
-                                                    <DropdownMenuItem onClick={() => setExecutionDialogOpen(true)} className="rounded-[8px] cursor-pointer">
-                                                        <Activity className="mr-2 h-4 w-4 opacity-70" /> Runs
-                                                    </DropdownMenuItem>
-                                                    <DropdownMenuItem onClick={() => setLogsDialogOpen(true)} className="rounded-[8px] cursor-pointer">
-                                                        <FileText className="mr-2 h-4 w-4 opacity-70" /> View Logs
+                                                    <DropdownMenuItem onClick={() => handleOpenRunDetails(selectedRunId)} className="rounded-[8px] cursor-pointer">
+                                                        <Activity className="mr-2 h-4 w-4 opacity-70" /> Run Details
                                                     </DropdownMenuItem>
                                                 </DropdownMenuContent>
                                             </DropdownMenu>
@@ -448,24 +507,46 @@ export const AudioDetailView = function AudioDetailView({ audioId: propAudioId }
                                     </div>
                                 </div>
 
-                                {/* Transcript */}
-                                <TranscriptSectionWrapper
-                                    audioId={audioId}
-                                    currentTime={currentTime}
-                                    onSeek={handleSeek}
-                                    transcript={transcript}
-                                    speakerMappings={speakerMappings}
-                                    transcriptMode={transcriptMode}
-                                    autoScrollEnabled={autoScrollEnabled}
-                                    notesOpen={notesOpen}
-                                    setNotesOpen={handleSetNotesOpen}
-                                    speakerRenameOpen={speakerRenameOpen}
-                                    setSpeakerRenameOpen={setSpeakerRenameOpen}
-                                    downloadDialogOpen={downloadDialogOpen}
-                                    setDownloadDialogOpen={setDownloadDialogOpen}
-                                    downloadFormat={downloadFormat}
-                                    isPlaying={isPlaying}
+                                <RunWorkspace
+                                    runs={runs}
+                                    activeRunId={runsData?.active_run_id}
+                                    selectedRunId={selectedRunId}
+                                    compareRunId={compareRunId}
+                                    mode={runViewMode}
+                                    selectedTranscript={selectedRunTranscript}
+                                    compareTranscript={compareRunTranscript}
+                                    selectedTranscriptLoading={selectedRunTranscriptLoading}
+                                    compareTranscriptLoading={compareRunTranscriptLoading}
+                                    onSelectedRunChange={setSelectedRunId}
+                                    onCompareRunChange={setCompareRunId}
+                                    onModeChange={setRunViewMode}
+                                    onRunAgain={() => setRerunDialogOpen(true)}
+                                    onOpenRunDetails={handleOpenRunDetails}
+                                    onOpenRunLogs={handleOpenRunLogs}
+                                    onDownloadRun={handleRunDownload}
                                 />
+
+                                {/* Transcript */}
+                                {transcript ? (
+                                    <TranscriptSectionWrapper
+                                        audioId={audioId}
+                                        currentTime={currentTime}
+                                        onSeek={handleSeek}
+                                        transcript={transcript}
+                                        speakerMappings={speakerMappings}
+                                        transcriptMode={transcriptMode}
+                                        autoScrollEnabled={autoScrollEnabled}
+                                        notesOpen={notesOpen}
+                                        setNotesOpen={handleSetNotesOpen}
+                                        speakerRenameOpen={speakerRenameOpen}
+                                        setSpeakerRenameOpen={setSpeakerRenameOpen}
+                                        isPlaying={isPlaying}
+                                    />
+                                ) : (
+                                    <div className="md:glass-card md:rounded-[var(--radius-card)] md:border-[var(--border-subtle)] md:shadow-[var(--shadow-card)] p-4 md:p-6 min-h-[260px] flex items-center justify-center text-center text-[var(--text-tertiary)]">
+                                        {selectedRun?.has_transcript === false ? "No transcript was captured for the selected run." : "Select a run with a transcript to view it here."}
+                                    </div>
+                                )}
                             </div>
                         </div>
                     </div>
@@ -511,11 +592,22 @@ export const AudioDetailView = function AudioDetailView({ audioId: propAudioId }
                 audioId={audioId}
                 isOpen={executionDialogOpen}
                 onClose={setExecutionDialogOpen}
+                initialRunId={executionDialogRunId}
             />
             <LogsDialog
                 audioId={audioId}
+                runId={logsDialogRunId}
+                runLabel={logsDialogRunId ? `Run ${runs.find((run) => run.id === logsDialogRunId)?.run_number || ""}`.trim() : undefined}
                 isOpen={logsDialogOpen}
                 onClose={setLogsDialogOpen}
+            />
+            <DownloadDialog
+                audioId={audioId}
+                isOpen={downloadDialogOpen}
+                onClose={setDownloadDialogOpen}
+                initialFormat={downloadFormat}
+                transcriptOverride={downloadTranscript}
+                filenameSuffix={downloadFilenameSuffix}
             />
             <SummaryDialog
                 audioId={audioId}

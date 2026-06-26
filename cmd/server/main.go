@@ -23,14 +23,8 @@ import (
 	"scriberr/internal/transcription"
 	"scriberr/internal/transcription/adapters"
 	"scriberr/internal/transcription/registry"
+	appversion "scriberr/internal/version"
 	"scriberr/pkg/logger"
-)
-
-// Version information (set by GoReleaser)
-var (
-	version = "dev"
-	commit  = "none"
-	date    = "unknown"
 )
 
 // @title Scriberr API
@@ -63,15 +57,15 @@ func main() {
 	flag.Parse()
 
 	if *showVersion {
-		fmt.Printf("Scriberr %s\n", version)
-		fmt.Printf("Commit: %s\n", commit)
-		fmt.Printf("Built: %s\n", date)
+		fmt.Printf("Scriberr %s\n", appversion.Version)
+		fmt.Printf("Commit: %s\n", appversion.Commit)
+		fmt.Printf("Built: %s\n", appversion.Date)
 		os.Exit(0)
 	}
 
 	// Initialize structured logging first
 	logger.Init(os.Getenv("LOG_LEVEL"))
-	logger.Info("Starting Scriberr", "version", version)
+	logger.Info("Starting Scriberr", "version", appversion.Version, "commit", appversion.Commit)
 
 	// Load configuration
 	logger.Startup("config", "Loading configuration")
