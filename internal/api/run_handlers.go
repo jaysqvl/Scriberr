@@ -75,12 +75,18 @@ func (h *Handler) preserveCurrentRunSnapshot(ctx context.Context, job *models.Tr
 // @Security BearerAuth
 func (h *Handler) ListJobRuns(c *gin.Context) {
 	jobID := c.Param("id")
-	if _, err := h.jobRepo.FindByID(c.Request.Context(), jobID); err != nil {
+	job, err := h.jobRepo.FindByID(c.Request.Context(), jobID)
+	if err != nil {
 		if err == gorm.ErrRecordNotFound {
 			c.JSON(http.StatusNotFound, gin.H{"error": "Job not found"})
 			return
 		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get job"})
+		return
+	}
+
+	if err := h.preserveCurrentRunSnapshot(c.Request.Context(), job); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to prepare run history"})
 		return
 	}
 

@@ -13,7 +13,7 @@ import { EmberPlayer, type EmberPlayerRef } from "@/components/audio/EmberPlayer
 import { cn } from "@/lib/utils";
 
 // Custom Hooks
-import { useAudioDetail, useUpdateTitle, useTranscript, type TranscriptSegment } from "@/features/transcription/hooks/useAudioDetail";
+import { useAudioDetail, useExecutionRuns, useUpdateTitle, useTranscript, type TranscriptSegment } from "@/features/transcription/hooks/useAudioDetail";
 import { useSpeakerMappings } from "@/features/transcription/hooks/useTranscriptionSpeakers";
 import { useTranscriptDownload } from "@/features/transcription/hooks/useTranscriptDownload";
 import { useAuth } from "@/features/auth/hooks/useAuth";
@@ -68,6 +68,7 @@ export const AudioDetailView = function AudioDetailView({ audioId: propAudioId }
     const { mutate: updateTitle } = useUpdateTitle(audioId || "");
     // Fetch transcript & speakers here to support menu actions
     const { data: transcript } = useTranscript(audioId || "", true);
+    const { data: runsData } = useExecutionRuns(audioId || "", !!audioId);
     const { data: speakerMappings = {} } = useSpeakerMappings(audioId || "", true);
 
     // Download Logic
@@ -223,6 +224,7 @@ export const AudioDetailView = function AudioDetailView({ audioId: propAudioId }
         day: "numeric",
         year: "numeric"
     }).toUpperCase();
+    const runCount = runsData?.runs.length || 0;
 
     return (
         <div className="h-screen flex flex-col bg-[var(--bg-main)] relative selection:bg-[var(--brand-light)] overflow-hidden">
@@ -333,6 +335,20 @@ export const AudioDetailView = function AudioDetailView({ audioId: propAudioId }
                                             >
                                                 <MessageCircle className="h-4 w-4" />
                                                 <span className="hidden sm:inline">Chat</span>
+                                            </Button>
+                                            <Button
+                                                variant="outline"
+                                                size="sm"
+                                                onClick={() => setExecutionDialogOpen(true)}
+                                                className="rounded-full border-[var(--border-subtle)] shadow-sm bg-[var(--bg-card)] hover:bg-[var(--bg-main)] transition-all gap-2 px-3"
+                                            >
+                                                <Activity className="h-4 w-4" />
+                                                <span className="hidden sm:inline">Runs</span>
+                                                {runCount > 0 && (
+                                                    <span className="rounded-full bg-[var(--brand-light)] px-1.5 py-0.5 text-[10px] font-semibold leading-none text-[var(--brand-solid)]">
+                                                        {runCount}
+                                                    </span>
+                                                )}
                                             </Button>
                                             <Button
                                                 variant="outline"

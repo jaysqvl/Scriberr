@@ -105,3 +105,40 @@ func (suite *APIHandlerTestSuite) TestRerunSnapshotsLegacyTranscriptBeforeQueuei
 	assert.Nil(suite.T(), updatedJob.Transcript)
 	assert.Equal(suite.T(), "nvidia_canary", updatedJob.Parameters.ModelFamily)
 }
+
+func (suite *APIHandlerTestSuite) TestListRunsBackfillsLegacyCompletedTranscript() {
+	job := suite.helper.CreateTestTranscriptionJob(suite.T(), "existing completed")
+	transcript := `{"text":"existing transcript"}`
+	job.Status = models.StatusCompleted
+	job.Transcript = &transcript
+	job.Parameters = models.WhisperXParams{
+		ModelFamily: "nvidia_canary",
+		Device:      "cuda",
+		BatchSize:   1,
+	}
+	assert.NoError(suite.T(), suite.helper.DB.Save(job).Error)
+
+	w := suite.makeAuthenticatedRequest(http.MethodGet, "/api/v1/transcription/"+job.ID+"/runs", nil, true)
+	assert.Equal(suite.T(), http.StatusOK, w.Code)
+
+	var listResponse struct {
+		ActiveRunID string `json:"active_run_id"`
+		Runs        []struct {
+			ID            string `json:"id"`
+			RunNumber     int    `json:"run_number"`
+			HasTranscript bool   `json:"has_transcript"`
+		} `json:"runs"`
+	}
+	assert.NoError(suite.T(), json.Unmarshal(w.Body.Bytes(), &listResponse))
+	assert.Len(suite.T(), listResponse.Runs, 1)
+	assert.Equal(suite.T(), 1, listResponse.Runs[0].RunNumber)
+	assert.True(suite.T(), listResponse.Runs[0].HasTranscript)
+	assert.Equal(suite.T(), listResponse.Runs[0].ID, listResponse.ActiveRunID)
+
+	w = suite.makeAuthenticatedRequest(http.MethodGet, "/api/v1/transcription/"+job.ID+"/runs", nil, true)
+	assert.Equal(suite.T(), http.StatusOK, w.Code)
+
+	var executionCount int64
+	assert.NoError(suite.T(), suite.helper.DB.Model(&models.TranscriptionJobExecution{}).Where("transcription_job_id = ?", job.ID).Count(&executionCount).Error)
+	assert.Equal(suite.T(), int64(1), executionCount)
+}
