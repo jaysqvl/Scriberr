@@ -4788,7 +4788,7 @@
                     "type": "string"
                 },
                 "attention_context_left": {
-                    "description": "NVIDIA Parakeet-specific parameters for long-form audio",
+                    "description": "NVIDIA model-specific parameters",
                     "type": "integer"
                 },
                 "attention_context_right": {
@@ -4899,6 +4899,24 @@
                 },
                 "no_speech_threshold": {
                     "type": "number"
+                },
+                "nvidia_chunk_duration": {
+                    "type": "integer"
+                },
+                "nvidia_precision": {
+                    "type": "string"
+                },
+                "nvidia_prompt": {
+                    "type": "string"
+                },
+                "nvidia_target_language": {
+                    "type": "string"
+                },
+                "nvidia_timestamps": {
+                    "type": "boolean"
+                },
+                "nvidia_use_chunking": {
+                    "type": "boolean"
                 },
                 "output_format": {
                     "description": "Output settings",
