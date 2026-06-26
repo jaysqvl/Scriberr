@@ -1,6 +1,6 @@
 services:
   scriberr:
-    # Build from local Dockerfile; replace with `image: docker.io/jaysqvl/scriberr:nightly-cuda`
+    # Build from local Dockerfile; replace with `image: ghcr.io/jaysqvl/scriberr:nightly-cuda`
     # if you prefer pulling a prebuilt image.
     build:
       context: .

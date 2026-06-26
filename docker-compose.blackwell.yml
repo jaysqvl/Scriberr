@@ -1,10 +1,10 @@
 # Docker Compose for Scriberr with Blackwell GPU support (RTX 50-series)
-# Uses pre-built image from Docker Hub
+# Uses pre-built image from GitHub Container Registry
 # For legacy GPUs (GTX 10-series through RTX 40-series), use docker-compose.cuda.yml instead
 version: "3.9"
 services:
   scriberr:
-    image: docker.io/jaysqvl/scriberr:nightly-blackwell
+    image: ghcr.io/jaysqvl/scriberr:nightly-blackwell
     ports:
       - "8080:8080"
     volumes:
