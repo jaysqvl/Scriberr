@@ -41,11 +41,14 @@ func NewTestHelper(t *testing.T, dbName string) *TestHelper {
 
 	// Create unique test config
 	cfg := &config.Config{
-		Port:         "8080",
-		Host:         "localhost",
-		DatabasePath: dbName,
-		JWTSecret:    "test-secret-key-for-unit-tests",
-		UploadDir:    "test_uploads_" + dbName,
+		Port:                  "8080",
+		Host:                  "localhost",
+		DatabasePath:          dbName,
+		JWTSecret:             "test-secret-key-for-unit-tests",
+		UploadDir:             "test_uploads_" + dbName,
+		TempDir:               "test_temp_" + dbName,
+		UploadChunkSizeBytes:  5,
+		UploadSessionTTLHours: 48,
 
 		WhisperXEnv: "test_whisperx_env",
 	}
@@ -86,12 +89,15 @@ func (h *TestHelper) Cleanup() {
 	database.Close()
 	os.Remove(h.Config.DatabasePath)
 	os.RemoveAll(h.Config.UploadDir)
+	os.RemoveAll(h.Config.TempDir)
 }
 
 // ResetDB cleans all tables in the database to ensure a clean state for each test
 func (h *TestHelper) ResetDB(t *testing.T) {
 	// List of models to clean
 	modelsToClean := []interface{}{
+		&models.UploadSessionFile{},
+		&models.UploadSession{},
 		&models.Note{},
 		&models.ChatSession{},
 		&models.TranscriptionJobExecution{}, // Assuming this exists based on MockJobRepository

@@ -35,6 +35,7 @@ import (
 type Handler struct {
 	config              *config.Config
 	authService         *auth.AuthService
+	loginLimiter        *auth.LoginAttemptLimiter
 	userService         service.UserService
 	fileService         service.FileService
 	jobRepo             repository.JobRepository
@@ -79,6 +80,7 @@ func NewHandler(
 	return &Handler{
 		config:              cfg,
 		authService:         authService,
+		loginLimiter:        newLoginAttemptLimiter(cfg),
 		userService:         userService,
 		fileService:         fileService,
 		jobRepo:             jobRepo,
@@ -261,112 +263,22 @@ func transformAPIKeyForList(apiKey models.APIKey) APIKeyListResponse {
 func (h *Handler) UploadAudio(c *gin.Context) {
 	// Note: This endpoint is also used by the CLI watcher to upload files.
 	// The CLI authenticates using a long-lived JWT token.
-
-	// Parse multipart form
 	header, err := c.FormFile(paramAudio)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Audio file is required"})
 		return
 	}
 
-	// Save file using FileService
-	uploadDir := h.config.UploadDir
-	filePath, err := h.fileService.SaveUpload(header, uploadDir)
+	filePath, err := h.fileService.SaveUpload(header, h.config.UploadDir)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save file"})
 		return
 	}
 
-	// Check if file is .webm and convert to MP3
-	// WebM files from browser MediaRecorder often lack proper duration metadata,
-	// causing playback issues. Converting to MP3 ensures proper metadata.
-	if strings.ToLower(filepath.Ext(filePath)) == ".webm" {
-		// Generate MP3 path
-		mp3Path := strings.TrimSuffix(filePath, filepath.Ext(filePath)) + ".mp3"
-
-		// Convert using FFmpeg with high quality settings and audio normalization
-		// -i: input file
-		// -vn: no video
-		// -af loudnorm: normalize audio levels (prevents muffled/quiet recordings)
-		// -acodec libmp3lame: MP3 encoder
-		// -b:a 320k: high quality constant bitrate (better than VBR for recordings)
-		cmd := exec.Command("ffmpeg", "-i", filePath, "-vn", "-af", "loudnorm", "-acodec", "libmp3lame", "-b:a", "320k", mp3Path)
-		if err := cmd.Run(); err != nil {
-			_ = h.fileService.RemoveFile(filePath)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to convert WebM audio to MP3"})
-			return
-		}
-
-		// Delete original .webm file
-		_ = h.fileService.RemoveFile(filePath)
-
-		// Update filePath to point to the MP3
-		filePath = mp3Path
-	}
-
-	// Create job record
-	jobID := filepath.Base(filePath)
-	jobID = jobID[:len(jobID)-len(filepath.Ext(jobID))] // Extract ID from filename
-
-	job := models.TranscriptionJob{
-		ID:        jobID,
-		AudioPath: filePath,
-		Status:    models.StatusUploaded,
-	}
-
-	if title := c.PostForm(paramTitle); title != "" {
-		job.Title = &title
-	}
-
-	// Save to database using Repository
-	if err := h.jobRepo.Create(c.Request.Context(), &job); err != nil {
-		_ = h.fileService.RemoveFile(filePath) // Clean up file
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create job"})
+	job, err := h.createUploadedAudioJob(c, filePath, c.PostForm(paramTitle))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
-	}
-
-	// Check for auto-transcription if user is authenticated via JWT
-	if userID, exists := c.Get("user_id"); exists {
-		// Use UserService to get user
-		user, err := h.userService.GetUser(c.Request.Context(), userID.(uint))
-		if err == nil && user.AutoTranscriptionEnabled {
-			// Get user's default profile or use system default
-			var profile *models.TranscriptionProfile
-
-			if user.DefaultProfileID != nil {
-				profile, _ = h.profileRepo.FindByID(c.Request.Context(), *user.DefaultProfileID)
-			}
-
-			// If no user default or user default not found, try to find a system default
-			if profile == nil {
-				profile, _ = h.profileRepo.FindDefault(c.Request.Context())
-			}
-
-			// If still no profile found, use the first available profile
-			if profile == nil {
-				profiles, _, _ := h.profileRepo.List(c.Request.Context(), 0, 1)
-				if len(profiles) > 0 {
-					profile = &profiles[0]
-				}
-			}
-
-			// If we found a profile, update the job and queue it
-			if profile != nil {
-				job.Parameters = profile.Parameters
-				job.Diarization = profile.Parameters.Diarize
-				job.Status = models.StatusPending
-
-				// Update the job in database
-				if err := h.jobRepo.Update(c.Request.Context(), &job); err == nil {
-					// Enqueue the job for transcription
-					if err := h.taskQueue.EnqueueJob(jobID); err != nil {
-						// If enqueueing fails, revert status but don't fail the upload
-						job.Status = models.StatusUploaded
-						_ = h.jobRepo.Update(c.Request.Context(), &job)
-					}
-				}
-			}
-		}
 	}
 
 	c.JSON(http.StatusOK, job)
@@ -386,87 +298,22 @@ func (h *Handler) UploadAudio(c *gin.Context) {
 // @Security ApiKeyAuth
 // @Security BearerAuth
 func (h *Handler) UploadVideo(c *gin.Context) {
-	// Parse multipart form
 	header, err := c.FormFile("video")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Video file is required"})
 		return
 	}
 
-	// Save file using FileService
-	uploadDir := h.config.UploadDir
-	videoPath, err := h.fileService.SaveUpload(header, uploadDir)
+	videoPath, err := h.fileService.SaveUpload(header, h.config.UploadDir)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save file"})
 		return
 	}
 
-	// Generate job ID from filename
-	jobID := filepath.Base(videoPath)
-	jobID = jobID[:len(jobID)-len(filepath.Ext(jobID))]
-
-	// Extract audio using ffmpeg (keep this logic here for now, or move to a MediaService)
-	audioPath := strings.TrimSuffix(videoPath, filepath.Ext(videoPath)) + ".mp3"
-	cmd := exec.Command("ffmpeg", "-i", videoPath, "-vn", "-acodec", "libmp3lame", "-q:a", "2", audioPath)
-	if err := cmd.Run(); err != nil {
-		_ = h.fileService.RemoveFile(videoPath)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to extract audio from video"})
+	job, err := h.createUploadedVideoJob(c, videoPath, c.PostForm(paramTitle))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
-	}
-
-	// Create job record
-	job := models.TranscriptionJob{
-		ID:        jobID,
-		AudioPath: audioPath, // Use the extracted audio path
-		Status:    models.StatusUploaded,
-	}
-
-	if title := c.PostForm(paramTitle); title != "" {
-		job.Title = &title
-	}
-
-	// Save to database
-	if err := h.jobRepo.Create(c.Request.Context(), &job); err != nil {
-		_ = h.fileService.RemoveFile(videoPath)
-		_ = h.fileService.RemoveFile(audioPath)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create job"})
-		return
-	}
-
-	// Clean up video file as we only need audio
-	// TODO: Make this configurable? Some users might want to keep the video.
-	_ = h.fileService.RemoveFile(videoPath)
-
-	// Check for auto-transcription (same logic as UploadAudio)
-	if userID, exists := c.Get("user_id"); exists {
-		user, err := h.userService.GetUser(c.Request.Context(), userID.(uint))
-		if err == nil && user.AutoTranscriptionEnabled {
-			var profile *models.TranscriptionProfile
-			if user.DefaultProfileID != nil {
-				profile, _ = h.profileRepo.FindByID(c.Request.Context(), *user.DefaultProfileID)
-			}
-			if profile == nil {
-				profile, _ = h.profileRepo.FindDefault(c.Request.Context())
-			}
-			if profile == nil {
-				profiles, _, _ := h.profileRepo.List(c.Request.Context(), 0, 1)
-				if len(profiles) > 0 {
-					profile = &profiles[0]
-				}
-			}
-
-			if profile != nil {
-				job.Parameters = profile.Parameters
-				job.Diarization = profile.Parameters.Diarize
-				job.Status = models.StatusPending
-				if err := h.jobRepo.Update(c.Request.Context(), &job); err == nil {
-					if err := h.taskQueue.EnqueueJob(jobID); err != nil {
-						job.Status = models.StatusUploaded
-						_ = h.jobRepo.Update(c.Request.Context(), &job)
-					}
-				}
-			}
-		}
 	}
 
 	c.JSON(http.StatusOK, job)
@@ -486,7 +333,6 @@ func (h *Handler) UploadVideo(c *gin.Context) {
 // @Security ApiKeyAuth
 // @Security BearerAuth
 func (h *Handler) UploadMultiTrack(c *gin.Context) {
-	// Parse multipart form
 	form, err := c.MultipartForm()
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to parse multipart form"})
@@ -495,64 +341,56 @@ func (h *Handler) UploadMultiTrack(c *gin.Context) {
 
 	files := form.File["files"]
 	if len(files) == 0 {
+		files = form.File["tracks"]
+	}
+	if len(files) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "No files uploaded"})
 		return
 	}
-
-	// Create a unique job ID
-	jobID := uuid.New().String()
-	uploadDir := h.config.UploadDir
-
-	// Create job directory
-	jobDir := filepath.Join(uploadDir, jobID)
-	if err := h.fileService.CreateDirectory(jobDir); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create job directory"})
+	aupFiles := form.File["aup"]
+	if len(aupFiles) != 1 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Exactly one .aup file is required"})
 		return
 	}
 
-	var trackFiles []models.MultiTrackFile
+	tempDir := filepath.Join(h.config.TempDir, "legacy_multitrack", uuid.New().String())
+	defer os.RemoveAll(tempDir)
 
-	// Process each file
+	aupPath := filepath.Join(tempDir, "aup", safeFilename(aupFiles[0].Filename))
+	if err := saveMultipartFileToPath(aupFiles[0], aupPath); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save AUP file"})
+		return
+	}
+	aup := assembledUploadFile{
+		Role:         models.UploadFileRoleAup,
+		OriginalName: aupFiles[0].Filename,
+		ContentType:  aupFiles[0].Header.Get("Content-Type"),
+		Path:         aupPath,
+		Size:         aupFiles[0].Size,
+	}
+
+	tracks := make([]assembledUploadFile, 0, len(files))
 	for i, fileHeader := range files {
-		// Save file using FileService
-		filePath, err := h.fileService.SaveUpload(fileHeader, jobDir)
-		if err != nil {
-			// Cleanup
-			_ = h.fileService.RemoveDirectory(jobDir)
+		trackPath := filepath.Join(tempDir, "tracks", fmt.Sprintf("%03d-%s", i, safeFilename(fileHeader.Filename)))
+		if err := saveMultipartFileToPath(fileHeader, trackPath); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to save file %s", fileHeader.Filename)})
 			return
 		}
-
-		// Create track record
-		trackFiles = append(trackFiles, models.MultiTrackFile{
-			TranscriptionJobID: jobID,
-			FilePath:           filePath,
-			FileName:           fileHeader.Filename,
-			TrackIndex:         i,
+		tracks = append(tracks, assembledUploadFile{
+			Role:         models.UploadFileRoleTrack,
+			OriginalName: fileHeader.Filename,
+			ContentType:  fileHeader.Header.Get("Content-Type"),
+			Path:         trackPath,
+			Size:         fileHeader.Size,
 		})
 	}
 
-	// Create job record
-	job := models.TranscriptionJob{
-		ID:              jobID,
-		Status:          models.StatusUploaded,
-		IsMultiTrack:    true,
-		MultiTrackFiles: trackFiles,
-	}
-
-	if title := c.PostForm(paramTitle); title != "" {
-		job.Title = &title
-	} else {
-		defaultTitle := fmt.Sprintf("Multi-track Job %s", jobID)
-		job.Title = &defaultTitle
-	}
-
-	// Save to database
-	if err := h.jobRepo.Create(c.Request.Context(), &job); err != nil {
-		_ = h.fileService.RemoveDirectory(jobDir)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create job"})
+	job, err := h.createMultiTrackJobFromPaths(c, c.PostForm(paramTitle), aup, tracks)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
+	c.JSON(http.StatusOK, job)
 }
 
 // @Summary Get multi-track merge status
@@ -719,79 +557,16 @@ func (h *Handler) SubmitJob(c *gin.Context) {
 		return
 	}
 
-	// Generate job ID from filename
-	jobID := filepath.Base(filePath)
-	jobID = jobID[:len(jobID)-len(filepath.Ext(jobID))]
-
-	// Parse parameters (accept both 'diarization' and 'diarize')
-	diarize := false
-	if v := c.PostForm("diarization"); v != "" {
-		diarize = strings.EqualFold(v, "true") || v == "1"
-	} else {
-		diarize = getFormBoolWithDefault(c, "diarize", false)
-	}
-	params := models.WhisperXParams{
-		Model:       getFormValueWithDefault(c, "model", "base"),
-		BatchSize:   getFormIntWithDefault(c, "batch_size", 16),
-		ComputeType: getFormValueWithDefault(c, "compute_type", "int8"),
-		Device:      getFormValueWithDefault(c, "device", "cpu"),
-		VadOnset:    getFormFloatWithDefault(c, "vad_onset", 0.500),
-		VadOffset:   getFormFloatWithDefault(c, "vad_offset", 0.363),
-		Diarize:     diarize,
-	}
-
-	if lang := c.PostForm("language"); lang != "" {
-		params.Language = &lang
-	}
-
-	if minSpeakers := c.PostForm("min_speakers"); minSpeakers != "" {
-		if min, err := strconv.Atoi(minSpeakers); err == nil {
-			params.MinSpeakers = &min
-		}
-	}
-
-	if maxSpeakers := c.PostForm("max_speakers"); maxSpeakers != "" {
-		if max, err := strconv.Atoi(maxSpeakers); err == nil {
-			params.MaxSpeakers = &max
-		}
-	}
-
-	if hfToken := c.PostForm("hf_token"); hfToken != "" {
-		params.HfToken = &hfToken
-	}
-
-	// Parse and validate diarization model
-	diarizeModel := getFormValueWithDefault(c, "diarize_model", "pyannote")
-	if diarizeModel != "pyannote" && diarizeModel != "nvidia_sortformer" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid diarize_model. Must be 'pyannote' or 'nvidia_sortformer'"})
+	params, err := submitParamsFromForm(c)
+	if err != nil {
 		_ = h.fileService.RemoveFile(filePath)
-		return
-	}
-	params.DiarizeModel = diarizeModel
-
-	// Create job
-	job := models.TranscriptionJob{
-		ID:          jobID,
-		AudioPath:   filePath,
-		Status:      models.StatusPending,
-		Diarization: diarize,
-		Parameters:  params,
-	}
-
-	if title := c.PostForm(paramTitle); title != "" {
-		job.Title = &title
-	}
-
-	// Save to database
-	if err := h.jobRepo.Create(c.Request.Context(), &job); err != nil {
-		_ = h.fileService.RemoveFile(filePath)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create job"})
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	// Enqueue job
-	if err := h.taskQueue.EnqueueJob(jobID); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to enqueue job"})
+	job, err := h.createSubmittedJobWithParams(c, filePath, c.PostForm(paramTitle), params)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
@@ -1112,7 +887,7 @@ func (h *Handler) getValidatedTranscriptionParams(c *gin.Context, job *models.Tr
 		"language", requestParams.Language)
 
 	// Validate NVIDIA-specific constraints
-	if requestParams.ModelFamily == "nvidia_parakeet" || requestParams.ModelFamily == "nvidia_canary" {
+	if requestParams.ModelFamily == "nvidia_parakeet" || requestParams.ModelFamily == "nvidia_canary" || requestParams.ModelFamily == "nvidia_canary_qwen" {
 		// Both NVIDIA models support multiple European languages
 		// No language restriction needed - models support auto-detection
 
@@ -1522,6 +1297,7 @@ func (h *Handler) GetAudioFile(c *gin.Context) {
 // @Success 200 {object} LoginResponse
 // @Failure 400 {object} map[string]string
 // @Failure 401 {object} map[string]string
+// @Failure 429 {object} map[string]string
 // @Router /api/v1/auth/login [post]
 func (h *Handler) Login(c *gin.Context) {
 	var req LoginRequest
@@ -1530,15 +1306,29 @@ func (h *Handler) Login(c *gin.Context) {
 		return
 	}
 
+	clientIP := c.ClientIP()
+	if decision := h.loginLimiter.Check(req.Username, clientIP); !decision.Allowed {
+		h.writeLoginRateLimit(c, req.Username, clientIP, decision.RetryAfter, decision.Reason)
+		return
+	}
+
 	user, err := h.userRepo.FindByUsername(c.Request.Context(), req.Username)
 	if err != nil {
-		logger.AuthEvent("login", req.Username, c.ClientIP(), false, "user_not_found")
+		if record := h.loginLimiter.RecordFailure(req.Username, clientIP); record.Locked {
+			h.writeLoginRateLimit(c, req.Username, clientIP, record.RetryAfter, record.Reason)
+			return
+		}
+		logger.AuthEvent("login", req.Username, clientIP, false, "reason", "user_not_found")
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid credentials"})
 		return
 	}
 
 	if !auth.CheckPassword(req.Password, user.Password) {
-		logger.AuthEvent("login", req.Username, c.ClientIP(), false, "invalid_password")
+		if record := h.loginLimiter.RecordFailure(req.Username, clientIP); record.Locked {
+			h.writeLoginRateLimit(c, req.Username, clientIP, record.RetryAfter, record.Reason)
+			return
+		}
+		logger.AuthEvent("login", req.Username, clientIP, false, "reason", "invalid_password")
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid credentials"})
 		return
 	}
@@ -1572,8 +1362,22 @@ func (h *Handler) Login(c *gin.Context) {
 	response.User.ID = user.ID
 	response.User.Username = user.Username
 
-	logger.AuthEvent("login", req.Username, c.ClientIP(), true)
+	h.loginLimiter.RecordSuccess(req.Username, clientIP)
+	logger.AuthEvent("login", req.Username, clientIP, true)
 	c.JSON(http.StatusOK, response)
+}
+
+func (h *Handler) writeLoginRateLimit(c *gin.Context, username, clientIP string, retryAfter time.Duration, reason string) {
+	retryAfterHeaderSeconds := retryAfterSeconds(retryAfter)
+	if retryAfterHeaderSeconds > 0 {
+		c.Header("Retry-After", strconv.Itoa(retryAfterHeaderSeconds))
+	}
+
+	logger.AuthEvent("login", username, clientIP, false,
+		"reason", reason,
+		"retry_after_seconds", retryAfterHeaderSeconds,
+	)
+	c.JSON(http.StatusTooManyRequests, gin.H{"error": "Too many login attempts. Try again later."})
 }
 
 // @Summary Logout user

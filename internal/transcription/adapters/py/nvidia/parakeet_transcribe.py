@@ -9,6 +9,7 @@ import sys
 import os
 from pathlib import Path
 import nemo.collections.asr as nemo_asr
+import torch
 
 
 def transcribe_audio(
@@ -18,6 +19,7 @@ def transcribe_audio(
     context_left: int = 256,
     context_right: int = 256,
     include_confidence: bool = True,
+    batch_size: int = 1,
 ):
     """
     Transcribe audio using NVIDIA Parakeet model.
@@ -42,6 +44,10 @@ def transcribe_audio(
     print(f"Loading NVIDIA Parakeet model from: {model_path}")
     asr_model = nemo_asr.models.ASRModel.restore_from(model_path)
 
+    if torch.cuda.is_available():
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+
     # Disable CUDA graphs to fix Error 35 on RTX 2000e Ada GPU
     # Uses change_decoding_strategy() to properly reconfigure the TDT decoder
     from omegaconf import OmegaConf, open_dict
@@ -57,6 +63,10 @@ def transcribe_audio(
     asr_model.change_decoding_strategy(dec_cfg)
     print("✓ CUDA graphs disabled successfully")
 
+    asr_model.eval()
+    if hasattr(asr_model, "freeze"):
+        asr_model.freeze()
+
     # Configure for long-form audio if context sizes are not default
     if context_left != 256 or context_right != 256:
         print(f"Configuring attention context: left={context_left}, right={context_right}")
@@ -71,63 +81,67 @@ def transcribe_audio(
             print("Continuing with default attention settings")
 
     print(f"Transcribing: {audio_path}")
+    print(f"Batch size: {batch_size}")
 
-    if timestamps:
-        output = asr_model.transcribe([audio_path], timestamps=True)
+    with torch.inference_mode():
+        if timestamps:
+            output = asr_model.transcribe([audio_path], timestamps=True, batch_size=batch_size)
 
-        # Extract text and timestamps
-        result_data = output[0]
-        text = result_data.text
-        word_timestamps = result_data.timestamp.get("word", [])
-        segment_timestamps = result_data.timestamp.get("segment", [])
+            # Extract text and timestamps
+            result_data = output[0]
+            text = result_data.text
+            word_timestamps = result_data.timestamp.get("word", [])
+            segment_timestamps = result_data.timestamp.get("segment", [])
 
-        print(f"Transcription: {text}")
+            print(f"Transcription: {text}")
 
-        # Prepare output data
-        output_data = {
-            "transcription": text,
-            "language": "en",
-            "word_timestamps": word_timestamps,
-            "segment_timestamps": segment_timestamps,
-            "audio_file": audio_path,
-            "model": "parakeet-tdt-0.6b-v3",
-            "context": {
-                "left": context_left,
-                "right": context_right
+            # Prepare output data
+            output_data = {
+                "transcription": text,
+                "language": "en",
+                "word_timestamps": word_timestamps,
+                "segment_timestamps": segment_timestamps,
+                "audio_file": audio_path,
+                "model": "parakeet-tdt-0.6b-v3",
+                "batch_size": batch_size,
+                "context": {
+                    "left": context_left,
+                    "right": context_right
+                }
             }
-        }
 
-        if include_confidence:
-            # Add confidence scores if available
-            if hasattr(result_data, 'confidence') and result_data.confidence:
-                output_data["confidence"] = result_data.confidence
+            if include_confidence:
+                # Add confidence scores if available
+                if hasattr(result_data, 'confidence') and result_data.confidence:
+                    output_data["confidence"] = result_data.confidence
 
-        # Save to file
-        if output_file:
-            with open(output_file, 'w', encoding='utf-8') as f:
-                json.dump(output_data, f, indent=2, ensure_ascii=False)
-            print(f"Results saved to: {output_file}")
+            # Save to file
+            if output_file:
+                with open(output_file, 'w', encoding='utf-8') as f:
+                    json.dump(output_data, f, indent=2, ensure_ascii=False)
+                print(f"Results saved to: {output_file}")
+            else:
+                print(json.dumps(output_data, indent=2, ensure_ascii=False))
+
         else:
-            print(json.dumps(output_data, indent=2, ensure_ascii=False))
+            # Simple transcription without timestamps
+            output = asr_model.transcribe([audio_path], batch_size=batch_size)
+            text = output[0].text
 
-    else:
-        # Simple transcription without timestamps
-        output = asr_model.transcribe([audio_path])
-        text = output[0].text
+            output_data = {
+                "transcription": text,
+                "language": "en",
+                "audio_file": audio_path,
+                "model": "parakeet-tdt-0.6b-v3",
+                "batch_size": batch_size,
+            }
 
-        output_data = {
-            "transcription": text,
-            "language": "en",
-            "audio_file": audio_path,
-            "model": "parakeet-tdt-0.6b-v3"
-        }
-
-        if output_file:
-            with open(output_file, 'w', encoding='utf-8') as f:
-                json.dump(output_data, f, indent=2, ensure_ascii=False)
-            print(f"Results saved to: {output_file}")
-        else:
-            print(json.dumps(output_data, indent=2, ensure_ascii=False))
+            if output_file:
+                with open(output_file, 'w', encoding='utf-8') as f:
+                    json.dump(output_data, f, indent=2, ensure_ascii=False)
+                print(f"Results saved to: {output_file}")
+            else:
+                print(json.dumps(output_data, indent=2, ensure_ascii=False))
 
 
 def main():
@@ -162,6 +176,10 @@ def main():
         "--no-confidence", dest="include_confidence", action="store_false",
         help="Exclude confidence scores"
     )
+    parser.add_argument(
+        "--batch-size", type=int, default=1,
+        help="Batch size for NeMo transcription (default: 1)"
+    )
 
     args = parser.parse_args()
 
@@ -178,6 +196,7 @@ def main():
             context_left=args.context_left,
             context_right=args.context_right,
             include_confidence=args.include_confidence,
+            batch_size=args.batch_size,
         )
     except Exception as e:
         print(f"Error during transcription: {e}")

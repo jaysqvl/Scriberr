@@ -222,6 +222,9 @@ func registerAdapters(cfg *config.Config) {
 	// Shared environment path for NVIDIA models (NeMo-based)
 	nvidiaEnvPath := filepath.Join(cfg.WhisperXEnv, "parakeet")
 
+	// Dedicated environment path for Canary-Qwen (SpeechLM2/SALM dependencies)
+	canaryQwenEnvPath := filepath.Join(cfg.WhisperXEnv, "canary-qwen")
+
 	// Dedicated environment path for PyAnnote (to avoid dependency conflicts)
 	pyannoteEnvPath := filepath.Join(cfg.WhisperXEnv, "pyannote")
 
@@ -235,6 +238,8 @@ func registerAdapters(cfg *config.Config) {
 		adapters.NewParakeetAdapter(nvidiaEnvPath))
 	registry.RegisterTranscriptionAdapter("canary",
 		adapters.NewCanaryAdapter(nvidiaEnvPath)) // Shares with Parakeet
+	registry.RegisterTranscriptionAdapter("canary_qwen",
+		adapters.NewCanaryQwenAdapter(canaryQwenEnvPath))
 	registry.RegisterTranscriptionAdapter("voxtral",
 		adapters.NewVoxtralAdapter(voxtralEnvPath))
 	registry.RegisterTranscriptionAdapter("openai_whisper",

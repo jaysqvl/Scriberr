@@ -13,6 +13,7 @@ import { Upload, Clock, CheckCircle, XCircle, FileAudio, Zap } from "lucide-reac
 import { useTranscriptionProfiles, useQuickTranscription } from "@/features/transcription/hooks/useAudioFiles";
 import type { Profile } from "@/features/transcription/hooks/useAudioFiles";
 import { useAuth } from "@/features/auth/hooks/useAuth";
+import type { UploadProgressInfo } from "@/lib/resumableUpload";
 
 
 
@@ -57,6 +58,7 @@ export function QuickTranscriptionDialog({ isOpen, onClose }: QuickTranscription
   const [selectedProfile, setSelectedProfile] = useState<string>("");
   const [job, setJob] = useState<QuickTranscriptionJob | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<UploadProgressInfo | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -98,12 +100,14 @@ export function QuickTranscriptionDialog({ isOpen, onClose }: QuickTranscription
 
     setStep("processing");
     setError(null);
+    setUploadProgress(null);
 
     try {
       const jobData = await submitQuickTranscription({
         file: selectedFile,
-        profileName: selectedProfile || undefined
-      });
+        profileName: selectedProfile || undefined,
+        onProgress: setUploadProgress,
+      }) as QuickTranscriptionJob;
 
       setJob(jobData);
       startPolling(jobData.id);
@@ -149,7 +153,14 @@ export function QuickTranscriptionDialog({ isOpen, onClose }: QuickTranscription
     setSelectedProfile("");
     setJob(null);
     setError(null);
+    setUploadProgress(null);
     onClose();
+  };
+
+  const formatBytes = (bytes: number): string => {
+    if (bytes >= 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
+    if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+    return `${(bytes / 1024).toFixed(1)} KB`;
   };
 
   const formatTime = (seconds: number): string => {
@@ -292,6 +303,22 @@ export function QuickTranscriptionDialog({ isOpen, onClose }: QuickTranscription
               <Button onClick={handleSubmit}>
                 Start Transcription
               </Button>
+            </div>
+          </div>
+        )}
+
+        {step === "processing" && !job && (
+          <div className="space-y-4 text-center">
+            <div className="flex flex-col items-center">
+              <Upload className="h-12 w-12 text-[var(--warning-solid)] mb-4" />
+              <h3 className="text-lg font-medium text-[var(--text-primary)] mb-2">
+                Uploading Audio...
+              </h3>
+              <p className="text-[var(--text-secondary)]">
+                {uploadProgress
+                  ? `${formatBytes(uploadProgress.uploadedBytes)} / ${formatBytes(uploadProgress.totalBytes)} (${Math.round(uploadProgress.percentage)}%)`
+                  : "Preparing upload..."}
+              </p>
             </div>
           </div>
         )}

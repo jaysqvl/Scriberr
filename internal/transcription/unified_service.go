@@ -22,21 +22,23 @@ import (
 )
 
 const (
-	ModelWhisperX        = "whisperx"
-	ModelPyannote        = "pyannote"
-	ModelParakeet        = "parakeet"
-	ModelCanary          = "canary"
-	ModelSortformer      = "sortformer"
-	ModelOpenAI          = "openai_whisper"
-	ModelVoxtral         = "voxtral"
-	ModelDiarization31   = "pyannote/speaker-diarization-3.1"
-	FamilyNvidiaCanary   = "nvidia_canary"
-	FamilyNvidiaParakeet = "nvidia_parakeet"
-	FamilyWhisper        = "whisper"
-	FamilyOpenAI         = "openai"
-	FamilyMistralVoxtral = "mistral_voxtral"
-	DiarizeSortformer    = "nvidia_sortformer"
-	OutputFormatJSON     = "json"
+	ModelWhisperX          = "whisperx"
+	ModelPyannote          = "pyannote"
+	ModelParakeet          = "parakeet"
+	ModelCanary            = "canary"
+	ModelCanaryQwen        = "canary_qwen"
+	ModelSortformer        = "sortformer"
+	ModelOpenAI            = "openai_whisper"
+	ModelVoxtral           = "voxtral"
+	ModelDiarization31     = "pyannote/speaker-diarization-3.1"
+	FamilyNvidiaCanary     = "nvidia_canary"
+	FamilyNvidiaCanaryQwen = "nvidia_canary_qwen"
+	FamilyNvidiaParakeet   = "nvidia_parakeet"
+	FamilyWhisper          = "whisper"
+	FamilyOpenAI           = "openai"
+	FamilyMistralVoxtral   = "mistral_voxtral"
+	DiarizeSortformer      = "nvidia_sortformer"
+	OutputFormatJSON       = "json"
 )
 
 // UnifiedTranscriptionService provides a unified interface for all transcription and diarization models
@@ -381,6 +383,8 @@ func (u *UnifiedTranscriptionService) selectModels(params models.WhisperXParams)
 		transcriptionModelID = ModelParakeet
 	case FamilyNvidiaCanary:
 		transcriptionModelID = ModelCanary
+	case FamilyNvidiaCanaryQwen:
+		transcriptionModelID = ModelCanaryQwen
 	case FamilyWhisper:
 		transcriptionModelID = ModelWhisperX
 	case FamilyOpenAI:
@@ -555,6 +559,8 @@ func (u *UnifiedTranscriptionService) convertParametersForModel(params models.Wh
 		return u.convertToParakeetParams(params)
 	case ModelCanary:
 		return u.convertToCanaryParams(params)
+	case ModelCanaryQwen:
+		return u.convertToCanaryQwenParams(params)
 	case ModelWhisperX:
 		return u.convertToWhisperXParams(params)
 	case ModelPyannote:
@@ -615,9 +621,11 @@ func (u *UnifiedTranscriptionService) convertToVoxtralParams(params models.Whisp
 // convertToParakeetParams converts to Parakeet-specific parameters
 func (u *UnifiedTranscriptionService) convertToParakeetParams(params models.WhisperXParams) map[string]interface{} {
 	return map[string]interface{}{
-		"timestamps":         true,
+		"timestamps":         nvidiaTimestamps(params),
 		"context_left":       params.AttentionContextLeft,
 		"context_right":      params.AttentionContextRight,
+		"batch_size":         nvidiaBatchSize(params.BatchSize),
+		"chunk_duration":     nvidiaChunkDuration(params, 300),
 		"output_format":      OutputFormatJSON,
 		"auto_convert_audio": true,
 	}
@@ -626,10 +634,11 @@ func (u *UnifiedTranscriptionService) convertToParakeetParams(params models.Whis
 // convertToCanaryParams converts to Canary-specific parameters
 func (u *UnifiedTranscriptionService) convertToCanaryParams(params models.WhisperXParams) map[string]interface{} {
 	paramMap := map[string]interface{}{
-		"timestamps":         true,
+		"timestamps":         nvidiaTimestamps(params),
 		"output_format":      OutputFormatJSON,
 		"auto_convert_audio": true,
 		"task":               params.Task,
+		"batch_size":         nvidiaBatchSize(params.BatchSize),
 	}
 
 	// Set source language
@@ -641,10 +650,82 @@ func (u *UnifiedTranscriptionService) convertToCanaryParams(params models.Whispe
 
 	// Set target language for translation
 	if params.Task == "translate" {
-		paramMap["target_lang"] = "en"
+		paramMap["target_lang"] = nvidiaTargetLanguage(params)
+	} else {
+		paramMap["target_lang"] = paramMap["source_lang"]
 	}
 
 	return paramMap
+}
+
+// convertToCanaryQwenParams converts to Canary-Qwen-specific parameters.
+func (u *UnifiedTranscriptionService) convertToCanaryQwenParams(params models.WhisperXParams) map[string]interface{} {
+	paramMap := map[string]interface{}{
+		"timestamps":         nvidiaTimestamps(params),
+		"output_format":      OutputFormatJSON,
+		"auto_convert_audio": true,
+		"batch_size":         nvidiaBatchSize(params.BatchSize),
+		"chunk_duration":     nvidiaChunkDuration(params, 40),
+		"device":             nvidiaStringDefault(params.Device, "auto"),
+		"precision":          nvidiaStringDefault(params.NvidiaPrecision, "float16"),
+		"prompt":             "Transcribe the following:",
+	}
+
+	if params.MaxNewTokens != nil && *params.MaxNewTokens > 0 {
+		paramMap["max_new_tokens"] = *params.MaxNewTokens
+	} else {
+		paramMap["max_new_tokens"] = 256
+	}
+
+	if params.Language != nil {
+		paramMap["language"] = *params.Language
+	} else {
+		paramMap["language"] = "en"
+	}
+
+	if params.NvidiaPrompt != nil && strings.TrimSpace(*params.NvidiaPrompt) != "" {
+		paramMap["prompt"] = strings.TrimSpace(*params.NvidiaPrompt)
+	}
+
+	return paramMap
+}
+
+func nvidiaTimestamps(params models.WhisperXParams) bool {
+	if params.NvidiaTimestamps == nil {
+		return true
+	}
+	return *params.NvidiaTimestamps
+}
+
+func nvidiaBatchSize(batchSize int) int {
+	if batchSize < 1 {
+		return 1
+	}
+	if batchSize > 8 {
+		return 8
+	}
+	return batchSize
+}
+
+func nvidiaChunkDuration(params models.WhisperXParams, fallback int) int {
+	if params.NvidiaChunkDuration > 0 {
+		return params.NvidiaChunkDuration
+	}
+	return fallback
+}
+
+func nvidiaTargetLanguage(params models.WhisperXParams) string {
+	if params.NvidiaTargetLanguage != nil && *params.NvidiaTargetLanguage != "" {
+		return *params.NvidiaTargetLanguage
+	}
+	return "en"
+}
+
+func nvidiaStringDefault(value, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return value
 }
 
 // convertToWhisperXParams converts to WhisperX-specific parameters

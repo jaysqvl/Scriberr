@@ -9,6 +9,7 @@ import sys
 import os
 from pathlib import Path
 import nemo.collections.asr as nemo_asr
+import torch
 
 
 def transcribe_audio(
@@ -20,6 +21,7 @@ def transcribe_audio(
     output_file: str = None,
     include_confidence: bool = True,
     preserve_formatting: bool = True,
+    batch_size: int = 1,
 ):
     """
     Transcribe or translate audio using NVIDIA Canary model.
@@ -48,90 +50,106 @@ def transcribe_audio(
     print(f"Task: {task}")
     print(f"Source language: {source_lang}")
     print(f"Target language: {target_lang}")
+    print(f"Batch size: {batch_size}")
 
-    if timestamps:
-        if task == "translate" and source_lang != target_lang:
-            # Translation with timestamps
-            output = asr_model.transcribe(
-                [audio_path],
-                source_lang=source_lang,
-                target_lang=target_lang,
-                timestamps=True
-            )
+    if torch.cuda.is_available():
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+
+    asr_model.eval()
+    if hasattr(asr_model, "freeze"):
+        asr_model.freeze()
+
+    with torch.inference_mode():
+        if timestamps:
+            if task == "translate" and source_lang != target_lang:
+                # Translation with timestamps
+                output = asr_model.transcribe(
+                    [audio_path],
+                    source_lang=source_lang,
+                    target_lang=target_lang,
+                    timestamps=True,
+                    batch_size=batch_size,
+                )
+            else:
+                # Transcription with timestamps
+                output = asr_model.transcribe(
+                    [audio_path],
+                    source_lang=source_lang,
+                    target_lang=target_lang,
+                    timestamps=True,
+                    batch_size=batch_size,
+                )
+
+            # Extract text and timestamps
+            result_data = output[0]
+            text = result_data.text
+            word_timestamps = result_data.timestamp.get("word", [])
+            segment_timestamps = result_data.timestamp.get("segment", [])
+
+            print(f"Result: {text}")
+
+            # Prepare output data
+            output_data = {
+                "transcription": text,
+                "source_language": source_lang,
+                "target_language": target_lang,
+                "task": task,
+                "word_timestamps": word_timestamps,
+                "segment_timestamps": segment_timestamps,
+                "audio_file": audio_path,
+                "model": "canary-1b-v2",
+                "batch_size": batch_size,
+            }
+
+            if include_confidence:
+                # Add confidence scores if available
+                if hasattr(result_data, 'confidence') and result_data.confidence:
+                    output_data["confidence"] = result_data.confidence
+
+            # Save to file
+            if output_file:
+                with open(output_file, 'w', encoding='utf-8') as f:
+                    json.dump(output_data, f, indent=2, ensure_ascii=False)
+                print(f"Results saved to: {output_file}")
+            else:
+                print(json.dumps(output_data, indent=2, ensure_ascii=False))
+
         else:
-            # Transcription with timestamps
-            output = asr_model.transcribe(
-                [audio_path],
-                source_lang=source_lang,
-                target_lang=target_lang,
-                timestamps=True
-            )
+            # Simple transcription/translation without timestamps
+            if task == "translate" and source_lang != target_lang:
+                output = asr_model.transcribe(
+                    [audio_path],
+                    source_lang=source_lang,
+                    target_lang=target_lang,
+                    batch_size=batch_size,
+                )
+            else:
+                output = asr_model.transcribe(
+                    [audio_path],
+                    source_lang=source_lang,
+                    target_lang=target_lang,
+                    batch_size=batch_size,
+                )
 
-        # Extract text and timestamps
-        result_data = output[0]
-        text = result_data.text
-        word_timestamps = result_data.timestamp.get("word", [])
-        segment_timestamps = result_data.timestamp.get("segment", [])
+            text = output[0].text
 
-        print(f"Result: {text}")
+            output_data = {
+                "transcription": text,
+                "source_language": source_lang,
+                "target_language": target_lang,
+                "task": task,
+                "audio_file": audio_path,
+                "model": "canary-1b-v2",
+                "batch_size": batch_size,
+            }
 
-        # Prepare output data
-        output_data = {
-            "transcription": text,
-            "source_language": source_lang,
-            "target_language": target_lang,
-            "task": task,
-            "word_timestamps": word_timestamps,
-            "segment_timestamps": segment_timestamps,
-            "audio_file": audio_path,
-            "model": "canary-1b-v2"
-        }
-
-        if include_confidence:
-            # Add confidence scores if available
-            if hasattr(result_data, 'confidence') and result_data.confidence:
-                output_data["confidence"] = result_data.confidence
-
-        # Save to file
-        if output_file:
-            with open(output_file, 'w', encoding='utf-8') as f:
-                json.dump(output_data, f, indent=2, ensure_ascii=False)
-            print(f"Results saved to: {output_file}")
-        else:
-            print(json.dumps(output_data, indent=2, ensure_ascii=False))
-
-    else:
-        # Simple transcription/translation without timestamps
-        if task == "translate" and source_lang != target_lang:
-            output = asr_model.transcribe(
-                [audio_path],
-                source_lang=source_lang,
-                target_lang=target_lang
-            )
-        else:
-            output = asr_model.transcribe(
-                [audio_path],
-                source_lang=source_lang,
-                target_lang=target_lang
-            )
-
-        text = output[0].text
-
-        output_data = {
-            "transcription": text,
-            "source_language": source_lang,
-            "target_language": target_lang,
-            "task": task,
-            "audio_file": audio_path,
-            "model": "canary-1b-v2"
-        }
-
-        if output_file:
-            with open(output_file, 'w', encoding='utf-8') as f:
-                json.dump(output_data, f, indent=2, ensure_ascii=False)
-            print(f"Results saved to: {output_file}")
-        else:
-            print(json.dumps(output_data, indent=2, ensure_ascii=False))
+            if output_file:
+                with open(output_file, 'w', encoding='utf-8') as f:
+                    json.dump(output_data, f, indent=2, ensure_ascii=False)
+                print(f"Results saved to: {output_file}")
+            else:
+                print(json.dumps(output_data, indent=2, ensure_ascii=False))
 
 
 def main():
@@ -176,6 +194,10 @@ def main():
         "--preserve-formatting", action="store_true", default=True,
         help="Preserve punctuation and capitalization"
     )
+    parser.add_argument(
+        "--batch-size", type=int, default=1,
+        help="Batch size for NeMo transcription (default: 1)"
+    )
 
     args = parser.parse_args()
 
@@ -194,6 +216,7 @@ def main():
             output_file=args.output,
             include_confidence=args.include_confidence,
             preserve_formatting=args.preserve_formatting,
+            batch_size=args.batch_size,
         )
     except Exception as e:
         print(f"Error during transcription: {e}")

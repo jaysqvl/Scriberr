@@ -116,9 +116,14 @@ type WhisperXParams struct {
 	HfToken       *string `json:"hf_token,omitempty" gorm:"type:text"`
 	PrintProgress bool    `json:"print_progress" gorm:"type:boolean;default:false"`
 
-	// NVIDIA Parakeet-specific parameters for long-form audio
-	AttentionContextLeft  int `json:"attention_context_left" gorm:"type:int;default:256"`
-	AttentionContextRight int `json:"attention_context_right" gorm:"type:int;default:256"`
+	// NVIDIA model-specific parameters
+	AttentionContextLeft  int     `json:"attention_context_left" gorm:"type:int;default:256"`
+	AttentionContextRight int     `json:"attention_context_right" gorm:"type:int;default:256"`
+	NvidiaChunkDuration   int     `json:"nvidia_chunk_duration" gorm:"type:int;default:300"`
+	NvidiaTimestamps      *bool   `json:"nvidia_timestamps,omitempty" gorm:"type:boolean;default:true"`
+	NvidiaTargetLanguage  *string `json:"nvidia_target_language,omitempty" gorm:"type:varchar(10)"`
+	NvidiaPrecision       string  `json:"nvidia_precision" gorm:"type:varchar(20);default:'float16'"`
+	NvidiaPrompt          *string `json:"nvidia_prompt,omitempty" gorm:"type:text"`
 
 	// Multi-track transcription settings
 	IsMultiTrackEnabled bool `json:"is_multi_track_enabled" gorm:"type:boolean;default:false"`
@@ -207,10 +212,10 @@ func (tp *TranscriptionProfile) BeforeSave(tx *gorm.DB) error {
 // LLMConfig represents LLM configuration settings
 type LLMConfig struct {
 	ID            uint      `json:"id" gorm:"primaryKey"`
-	Provider      string    `json:"provider" gorm:"not null;type:varchar(50)"` // "ollama" or "openai"
-	BaseURL       *string   `json:"base_url,omitempty" gorm:"type:text"`       // For Ollama
+	Provider      string    `json:"provider" gorm:"not null;type:varchar(50)"`  // "ollama" or "openai"
+	BaseURL       *string   `json:"base_url,omitempty" gorm:"type:text"`        // For Ollama
 	OpenAIBaseURL *string   `json:"openai_base_url,omitempty" gorm:"type:text"` // For OpenAI custom endpoint
-	APIKey        *string   `json:"api_key,omitempty" gorm:"type:text"`        // For OpenAI (encrypted)
+	APIKey        *string   `json:"api_key,omitempty" gorm:"type:text"`         // For OpenAI (encrypted)
 	IsActive      bool      `json:"is_active" gorm:"type:boolean;default:false"`
 	CreatedAt     time.Time `json:"created_at" gorm:"autoCreateTime"`
 	UpdatedAt     time.Time `json:"updated_at" gorm:"autoUpdateTime"`

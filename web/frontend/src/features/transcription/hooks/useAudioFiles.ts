@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient, keepPreviousData, useInfiniteQuery } from '@tanstack/react-query';
 import { useAuth } from '@/features/auth/hooks/useAuth';
+import { uploadResumable, type UploadProgressInfo } from '@/lib/resumableUpload';
 
 export interface AudioFile {
     id: string;
@@ -109,24 +110,18 @@ export function useAudioUpload() {
     const queryClient = useQueryClient();
 
     return useMutation({
-        mutationFn: async ({ file, isVideo }: { file: File, isVideo: boolean }) => {
-            const formData = new FormData();
-            const fieldName = isVideo ? 'video' : 'audio';
-            const endpoint = isVideo ? '/api/v1/transcription/upload-video' : '/api/v1/transcription/upload';
-
-            formData.append(fieldName, file);
-            formData.append('title', file.name.replace(/\.[^/.]+$/, ''));
-
-            const response = await fetch(endpoint, {
-                method: 'POST',
+        mutationFn: async ({ file, isVideo, onProgress }: { file: File, isVideo: boolean, onProgress?: (progress: UploadProgressInfo) => void }) => {
+            return uploadResumable({
+                kind: isVideo ? 'video' : 'audio',
+                title: file.name.replace(/\.[^/.]+$/, ''),
+                files: [{
+                    id: isVideo ? 'video' : 'audio',
+                    role: isVideo ? 'video' : 'audio',
+                    file,
+                }],
                 headers: getAuthHeaders(),
-                body: formData,
+                onProgress,
             });
-
-            if (!response.ok) {
-                throw new Error('Upload failed');
-            }
-            return response.json();
         },
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['audioFiles'] });
@@ -139,26 +134,21 @@ export function useMultiTrackUpload() {
     const queryClient = useQueryClient();
 
     return useMutation({
-        mutationFn: async ({ files, aupFile, title }: { files: File[], aupFile: File, title: string }) => {
-            const formData = new FormData();
-            formData.append('title', title);
-            formData.append('aup', aupFile);
-
-            files.forEach(file => {
-                formData.append('tracks', file);
-            });
-
-            const response = await fetch("/api/v1/transcription/upload-multitrack", {
-                method: "POST",
+        mutationFn: async ({ files, aupFile, title, onProgress }: { files: File[], aupFile: File, title: string, onProgress?: (progress: UploadProgressInfo) => void }) => {
+            return uploadResumable({
+                kind: 'multitrack',
+                title,
+                files: [
+                    { id: 'aup', role: 'aup', file: aupFile },
+                    ...files.map((file, index) => ({
+                        id: `track-${index}`,
+                        role: 'track' as const,
+                        file,
+                    })),
+                ],
                 headers: getAuthHeaders(),
-                body: formData,
+                onProgress,
             });
-
-            if (!response.ok) {
-                const errorData = await response.json();
-                throw new Error(errorData.error || 'Upload failed');
-            }
-            return response.json();
         },
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ['audioFiles'] });
@@ -220,22 +210,19 @@ export function useTranscriptionProfiles() {
 export function useQuickTranscription() {
     const { getAuthHeaders } = useAuth();
     return useMutation({
-        mutationFn: async ({ file, profileName }: { file: File, profileName?: string }) => {
-            const formData = new FormData();
-            formData.append("audio", file);
-            if (profileName) formData.append("profile_name", profileName);
-
-            const response = await fetch("/api/v1/transcription/quick", {
-                method: "POST",
+        mutationFn: async ({ file, profileName, onProgress }: { file: File, profileName?: string, onProgress?: (progress: UploadProgressInfo) => void }) => {
+            return uploadResumable({
+                kind: 'quick',
+                title: file.name.replace(/\.[^/.]+$/, ''),
+                profileName,
+                files: [{
+                    id: 'audio',
+                    role: 'audio',
+                    file,
+                }],
                 headers: getAuthHeaders(),
-                body: formData,
+                onProgress,
             });
-
-            if (!response.ok) {
-                const errorData = await response.json();
-                throw new Error(errorData.error || "Failed to submit transcription");
-            }
-            return response.json();
         }
     });
 }

@@ -92,6 +92,26 @@ func NewParakeetAdapter(envPath string) *ParakeetAdapter {
 			Description: "Right attention context size for long-form audio",
 			Group:       "advanced",
 		},
+		{
+			Name:        "batch_size",
+			Type:        "int",
+			Required:    false,
+			Default:     1,
+			Min:         &[]float64{1}[0],
+			Max:         &[]float64{8}[0],
+			Description: "Batch size for processing (higher uses more memory)",
+			Group:       "advanced",
+		},
+		{
+			Name:        "chunk_duration",
+			Type:        "int",
+			Required:    false,
+			Default:     300,
+			Min:         &[]float64{30}[0],
+			Max:         &[]float64{1800}[0],
+			Description: "Chunk duration in seconds before buffered long-audio inference is used",
+			Group:       "advanced",
+		},
 
 		// Audio preprocessing
 		{
@@ -314,13 +334,7 @@ func (p *ParakeetAdapter) Transcribe(ctx context.Context, input interfaces.Audio
 		}
 	}
 
-	// Get chunk threshold from environment (default: 300 seconds = 5 minutes)
-	chunkThreshold := 300
-	if thresholdStr := os.Getenv("PARAKEET_CHUNK_THRESHOLD_SECS"); thresholdStr != "" {
-		if parsed, err := strconv.Atoi(thresholdStr); err == nil && parsed > 0 {
-			chunkThreshold = parsed
-		}
-	}
+	chunkThreshold := p.chunkDuration(params)
 
 	// Choose processing path based on audio duration
 	chunkThresholdDuration := time.Duration(chunkThreshold) * time.Second
@@ -385,7 +399,9 @@ func (p *ParakeetAdapter) transcribeStandard(ctx context.Context, input interfac
 
 	// Execute Parakeet
 	cmd := exec.CommandContext(ctx, "uv", args...)
-	cmd.Env = append(os.Environ(), "PYTHONUNBUFFERED=1")
+	cmd.Env = append(os.Environ(),
+		"PYTHONUNBUFFERED=1",
+		"PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True")
 
 	// Setup log file
 	logFile, err := os.OpenFile(filepath.Join(outputDir, "transcription.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
@@ -434,7 +450,9 @@ func (p *ParakeetAdapter) transcribeBuffered(ctx context.Context, input interfac
 
 	// Execute buffered inference
 	cmd := exec.CommandContext(ctx, "uv", args...)
-	cmd.Env = append(os.Environ(), "PYTHONUNBUFFERED=1")
+	cmd.Env = append(os.Environ(),
+		"PYTHONUNBUFFERED=1",
+		"PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True")
 
 	// Setup log file
 	logFile, err := os.OpenFile(filepath.Join(outputDir, "transcription.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
@@ -487,11 +505,14 @@ func (p *ParakeetAdapter) buildParakeetArgs(input interfaces.AudioInput, params 
 	// Add timestamps flag (Parakeet script supports --timestamps)
 	if p.GetBoolParameter(params, "timestamps") {
 		args = append(args, "--timestamps")
+	} else {
+		args = append(args, "--no-timestamps")
 	}
 
 	// Add context settings
 	args = append(args, "--context-left", strconv.Itoa(p.GetIntParameter(params, "context_left")))
 	args = append(args, "--context-right", strconv.Itoa(p.GetIntParameter(params, "context_right")))
+	args = append(args, "--batch-size", strconv.Itoa(p.GetIntParameter(params, "batch_size")))
 
 	// Note: --include-confidence is not supported by Parakeet script, removed
 
@@ -587,21 +608,33 @@ func (p *ParakeetAdapter) copyBufferedScript() error {
 func (p *ParakeetAdapter) buildBufferedArgs(input interfaces.AudioInput, params map[string]interface{}, tempDir string) ([]string, error) {
 	outputFile := filepath.Join(tempDir, "result.json")
 
-	// Get chunk threshold from environment (default: 300 seconds = 5 minutes)
-	chunkDuration := "300"
-	if thresholdStr := os.Getenv("PARAKEET_CHUNK_THRESHOLD_SECS"); thresholdStr != "" {
-		chunkDuration = thresholdStr
-	}
+	chunkDuration := p.chunkDuration(params)
 
 	scriptPath := filepath.Join(p.envPath, "parakeet_transcribe_buffered.py")
 	args := []string{
 		"run", "--native-tls", "--project", p.envPath, "python", scriptPath,
 		input.FilePath,
 		"--output", outputFile,
-		"--chunk-len", chunkDuration,
+		"--chunk-len", strconv.Itoa(chunkDuration),
 	}
 
 	return args, nil
+}
+
+func (p *ParakeetAdapter) chunkDuration(params map[string]interface{}) int {
+	if _, ok := params["chunk_duration"]; ok {
+		if chunkDuration := p.GetIntParameter(params, "chunk_duration"); chunkDuration > 0 {
+			return chunkDuration
+		}
+	}
+
+	if thresholdStr := os.Getenv("PARAKEET_CHUNK_THRESHOLD_SECS"); thresholdStr != "" {
+		if parsed, err := strconv.Atoi(thresholdStr); err == nil && parsed > 0 {
+			return parsed
+		}
+	}
+
+	return 300
 }
 
 // parseBufferedResult parses the buffered inference output

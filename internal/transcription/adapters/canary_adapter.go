@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -414,6 +415,8 @@ func (c *CanaryAdapter) buildCanaryArgs(input interfaces.AudioInput, params map[
 	} else {
 		args = append(args, "--no-timestamps")
 	}
+
+	args = append(args, "--batch-size", strconv.Itoa(c.GetIntParameter(params, "batch_size")))
 
 	// Add confidence flag
 	if c.GetBoolParameter(params, "include_confidence") {

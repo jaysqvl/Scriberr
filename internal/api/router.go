@@ -17,6 +17,14 @@ func SetupRoutes(handler *Handler, authService *auth.AuthService) *gin.Engine {
 
 	// Create Gin router without default middleware
 	router := gin.New()
+	trustedProxies := []string(nil)
+	if handler != nil && handler.config != nil && len(handler.config.TrustedProxies) > 0 {
+		trustedProxies = handler.config.TrustedProxies
+	}
+	if err := router.SetTrustedProxies(trustedProxies); err != nil {
+		logger.Warn("Invalid trusted proxy configuration, disabling trusted proxies", "error", err)
+		_ = router.SetTrustedProxies(nil)
+	}
 
 	// Add recovery middleware
 	router.Use(gin.Recovery())
@@ -52,7 +60,7 @@ func SetupRoutes(handler *Handler, authService *auth.AuthService) *gin.Engine {
 			c.Header("Access-Control-Allow-Credentials", "true")
 		}
 		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		c.Header("Access-Control-Allow-Headers", "Origin, Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization, X-API-Key")
+		c.Header("Access-Control-Allow-Headers", "Origin, Content-Type, Content-Length, Content-Range, Accept-Encoding, X-CSRF-Token, Authorization, X-API-Key, X-Upload-Token, X-Chunk-SHA256")
 
 		if c.Request.Method == "OPTIONS" {
 			c.AbortWithStatus(204)
@@ -125,6 +133,11 @@ func SetupRoutes(handler *Handler, authService *auth.AuthService) *gin.Engine {
 				uploadRoutes.POST("/upload", handler.UploadAudio)
 				uploadRoutes.POST("/upload-video", handler.UploadVideo)
 				uploadRoutes.POST("/upload-multitrack", handler.UploadMultiTrack)
+				uploadRoutes.POST("/uploads", handler.CreateUploadSession)
+				uploadRoutes.GET("/uploads/:id", handler.GetUploadSession)
+				uploadRoutes.PUT("/uploads/:id/files/:file_id/chunks/:index", handler.UploadChunk)
+				uploadRoutes.POST("/uploads/:id/complete", handler.CompleteUploadSession)
+				uploadRoutes.DELETE("/uploads/:id", handler.CancelUploadSession)
 				uploadRoutes.GET("/:id/audio", handler.GetAudioFile) // Audio streaming shouldn't be compressed
 			}
 

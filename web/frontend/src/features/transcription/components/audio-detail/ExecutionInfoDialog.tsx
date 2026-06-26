@@ -151,12 +151,27 @@ function CuratedParamsDisplay({ params }: { params: any }) {
         specificKeys = [
             'attention_context_left',
             'attention_context_right',
+            'nvidia_chunk_duration',
+            'nvidia_timestamps',
             ...(params.diarize ? ['diarize_model'] : [])
         ];
     } else if (params.model_family === 'openai') {
         specificKeys = ['model', 'api_key']; // api_key should ideally be masked or hidden
     } else if (params.model_family === 'nvidia_canary') {
-        specificKeys = ['model']; // Canary usually simpler
+        specificKeys = [
+            'nvidia_target_language',
+            'nvidia_timestamps',
+            ...(params.diarize ? ['diarize_model'] : [])
+        ];
+    } else if (params.model_family === 'nvidia_canary_qwen') {
+        specificKeys = [
+            'nvidia_chunk_duration',
+            'nvidia_timestamps',
+            'nvidia_precision',
+            'max_new_tokens',
+            'nvidia_prompt',
+            ...(params.diarize ? ['diarize_model'] : [])
+        ];
     }
 
     const keysToShow = [...commonKeys, ...specificKeys];

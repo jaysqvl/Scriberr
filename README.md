@@ -183,6 +183,12 @@ Scriberr works out of the box. However, for Homebrew or manual installations, yo
 | `WHISPERX_ENV` | Path to the managed Python environment for models. | `data/whisperx-env` |
 | `OPENAI_API_KEY` | API Key for OpenAI (optional). | `""` |
 | `JWT_SECRET` | Secret for signing JWTs. Auto-generated if not set. | Auto-generated |
+| `AUTH_RATE_LIMIT_ENABLED` | Enable in-app login throttling and lockouts. | `true` |
+| `AUTH_MAX_FAILED_ATTEMPTS` | Failed attempts per username/IP before lockout. | `5` |
+| `AUTH_FAILURE_WINDOW_SECONDS` | Rolling window for failed login attempts. | `600` |
+| `AUTH_LOCKOUT_SECONDS` | Lockout duration after too many failed attempts. | `900` |
+| `AUTH_IP_MAX_FAILED_ATTEMPTS` | Failed attempts per IP before IP-level lockout. | `20` |
+| `TRUSTED_PROXIES` | Comma-separated proxy IPs/CIDRs trusted for forwarded client IP headers. Empty means trust none. | `""` |
 
 **Example `.env` file:**
 
@@ -198,7 +204,17 @@ UPLOAD_DIR=/var/lib/scriberr/data/uploads
 
 # Security
 JWT_SECRET=your-super-secret-key-change-this
+AUTH_RATE_LIMIT_ENABLED=true
+# TRUSTED_PROXIES=172.18.0.0/16
 ```
+
+#### Login Abuse Protection
+
+Scriberr includes in-app login throttling by default. Failed logins are tracked by username/IP and by IP, fast retries receive `429 Too Many Requests` with `Retry-After`, and repeated failures are temporarily locked out.
+
+If Scriberr is behind a reverse proxy and you want throttling to use the original client IP, set `TRUSTED_PROXIES` to the proxy IP or CIDR range. Leave it empty when exposing Scriberr directly so forwarded headers cannot be spoofed.
+
+The auth logger emits stable fields such as `event=login`, `result=failure`, `reason=invalid_password`, and `ip=...`, so host-level tools like fail2ban can still be layered on top if desired.
 
 ### Docker Deployment
 
@@ -218,7 +234,7 @@ Use this configuration for running Scriberr on any machine without a dedicated N
 ```yaml
 services:
   scriberr:
-    image: docker.io/jaysqvl/scriberr:nightly
+    image: ghcr.io/jaysqvl/scriberr:nightly
     ports:
       - "8080:8080"
     volumes:
@@ -254,7 +270,7 @@ If you have a compatible NVIDIA GPU, this configuration enables hardware acceler
 ```yaml
 services:
   scriberr:
-    image: docker.io/jaysqvl/scriberr:nightly-cuda
+    image: ghcr.io/jaysqvl/scriberr:nightly-cuda
     ports:
       - "8080:8080"
     volumes:

@@ -13,6 +13,7 @@ import soundfile as sf
 import numpy as np
 from pathlib import Path
 import nemo.collections.asr as nemo_asr
+import torch
 
 
 def split_audio_file(audio_path, chunk_duration_secs=300):
@@ -64,6 +65,10 @@ def transcribe_buffered(
 
     asr_model = nemo_asr.models.ASRModel.restore_from(model_path)
 
+    if torch.cuda.is_available():
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+
     # Disable CUDA graphs to fix Error 35 on RTX 2000e Ada GPU
     # Uses change_decoding_strategy() to properly reconfigure the TDT decoder
     from omegaconf import OmegaConf, open_dict
@@ -78,6 +83,10 @@ def transcribe_buffered(
     # Apply the new decoding strategy (this rebuilds the decoder with our config)
     asr_model.change_decoding_strategy(dec_cfg)
     print("✓ CUDA graphs disabled successfully")
+
+    asr_model.eval()
+    if hasattr(asr_model, "freeze"):
+        asr_model.freeze()
 
     print(f"Splitting audio into {chunk_duration_secs}s chunks...")
     chunks, sr = split_audio_file(audio_path, chunk_duration_secs)
@@ -96,11 +105,12 @@ def transcribe_buffered(
 
         try:
             # Transcribe chunk
-            output = asr_model.transcribe(
-                [chunk_path],
-                batch_size=1,
-                timestamps=True,
-            )
+            with torch.inference_mode():
+                output = asr_model.transcribe(
+                    [chunk_path],
+                    batch_size=1,
+                    timestamps=True,
+                )
 
             result_data = output[0]
             chunk_text = result_data.text

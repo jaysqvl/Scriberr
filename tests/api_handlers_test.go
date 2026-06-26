@@ -153,6 +153,27 @@ func (suite *APIHandlerTestSuite) makeAuthenticatedRequest(method, path string, 
 	return w
 }
 
+func (suite *APIHandlerTestSuite) makeLoginRequest(router *gin.Engine, username, password, remoteAddr, forwardedFor string) *httptest.ResponseRecorder {
+	loginData := map[string]string{
+		"username": username,
+		"password": password,
+	}
+
+	jsonData, _ := json.Marshal(loginData)
+	req, _ := http.NewRequest("POST", "/api/v1/auth/login", bytes.NewBuffer(jsonData))
+	req.Header.Set("Content-Type", "application/json")
+	if forwardedFor != "" {
+		req.Header.Set("X-Forwarded-For", forwardedFor)
+	}
+	if remoteAddr != "" {
+		req.RemoteAddr = remoteAddr
+	}
+
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	return w
+}
+
 // Test health check endpoint
 func (suite *APIHandlerTestSuite) TestHealthCheck() {
 	w := httptest.NewRecorder()
@@ -204,6 +225,57 @@ func (suite *APIHandlerTestSuite) TestLoginUser() {
 	assert.NoError(suite.T(), err)
 	assert.NotEmpty(suite.T(), response.Token)
 	assert.Equal(suite.T(), suite.helper.TestUser.Username, response.User.Username)
+}
+
+func (suite *APIHandlerTestSuite) TestLoginRateLimitInvalidCredentials() {
+	w := suite.makeLoginRequest(suite.router, suite.helper.TestUser.Username, "wrong-password", "198.51.100.10:1000", "")
+	assert.Equal(suite.T(), http.StatusUnauthorized, w.Code)
+
+	w = suite.makeLoginRequest(suite.router, suite.helper.TestUser.Username, "wrong-password", "198.51.100.10:1001", "")
+	assert.Equal(suite.T(), http.StatusTooManyRequests, w.Code)
+	assert.NotEmpty(suite.T(), w.Header().Get("Retry-After"))
+
+	var response map[string]string
+	err := json.Unmarshal(w.Body.Bytes(), &response)
+	assert.NoError(suite.T(), err)
+	assert.Equal(suite.T(), "Too many login attempts. Try again later.", response["error"])
+}
+
+func (suite *APIHandlerTestSuite) TestLoginRateLimitUnknownUserMatchesBadPassword() {
+	w := suite.makeLoginRequest(suite.router, "missing-rate-limit-user", "wrong-password", "198.51.100.11:1000", "")
+	assert.Equal(suite.T(), http.StatusUnauthorized, w.Code)
+
+	w = suite.makeLoginRequest(suite.router, "missing-rate-limit-user", "wrong-password", "198.51.100.11:1001", "")
+	assert.Equal(suite.T(), http.StatusTooManyRequests, w.Code)
+
+	var response map[string]string
+	err := json.Unmarshal(w.Body.Bytes(), &response)
+	assert.NoError(suite.T(), err)
+	assert.Equal(suite.T(), "Too many login attempts. Try again later.", response["error"])
+}
+
+func (suite *APIHandlerTestSuite) TestLoginRateLimitIgnoresForwardedForWithoutTrustedProxy() {
+	w := suite.makeLoginRequest(suite.router, "proxy-untrusted-user", "wrong-password", "192.0.2.200:1000", "203.0.113.10")
+	assert.Equal(suite.T(), http.StatusUnauthorized, w.Code)
+
+	w = suite.makeLoginRequest(suite.router, "proxy-untrusted-user", "wrong-password", "192.0.2.200:1001", "203.0.113.11")
+	assert.Equal(suite.T(), http.StatusTooManyRequests, w.Code)
+}
+
+func (suite *APIHandlerTestSuite) TestLoginRateLimitHonorsTrustedProxy() {
+	originalTrustedProxies := suite.helper.Config.TrustedProxies
+	suite.helper.Config.TrustedProxies = []string{"192.0.2.210"}
+	defer func() {
+		suite.helper.Config.TrustedProxies = originalTrustedProxies
+	}()
+
+	router := api.SetupRoutes(suite.handler, suite.helper.AuthService)
+
+	w := suite.makeLoginRequest(router, "proxy-trusted-user", "wrong-password", "192.0.2.210:1000", "203.0.113.10")
+	assert.Equal(suite.T(), http.StatusUnauthorized, w.Code)
+
+	w = suite.makeLoginRequest(router, "proxy-trusted-user", "wrong-password", "192.0.2.210:1001", "203.0.113.11")
+	assert.Equal(suite.T(), http.StatusUnauthorized, w.Code)
 }
 
 // Test getting registration status

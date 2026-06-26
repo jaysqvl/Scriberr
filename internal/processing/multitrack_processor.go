@@ -156,7 +156,7 @@ func (p *MultiTrackProcessor) updateTrackOffsets(jobID string, aupTracks []audio
 	// Update each track file with offset information
 	for _, trackFile := range trackFiles {
 		// Try to find matching aup track
-		originalFilename := trackFile.FileName + filepath.Ext(trackFile.FilePath)
+		originalFilename := filepath.Base(trackFile.FileName)
 		if aupTrack, exists := aupTrackMap[originalFilename]; exists {
 			updates := map[string]interface{}{
 				"offset": aupTrack.Offset,

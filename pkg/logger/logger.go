@@ -209,15 +209,20 @@ func HTTPRequest(method, path string, status int, duration time.Duration, userAg
 
 // Authentication logging
 func AuthEvent(event, username, ip string, success bool, details ...any) {
+	result := "failure"
 	if success {
-		Info("User login successful", "username", username)
-		Debug("Auth event details",
-			append([]any{"event", event, "username", username, "ip", ip, "success", success}, details...)...)
-	} else {
-		Info("User login failed", "username", username, "reason", "invalid_credentials")
-		Debug("Auth event details",
-			append([]any{"event", event, "username", username, "ip", ip, "success", success}, details...)...)
+		result = "success"
 	}
+
+	args := append([]any{
+		"event", event,
+		"username", username,
+		"ip", ip,
+		"result", result,
+	}, details...)
+
+	Info("Authentication event", args...)
+	Debug("Auth event details", args...)
 }
 
 // Worker operation logger

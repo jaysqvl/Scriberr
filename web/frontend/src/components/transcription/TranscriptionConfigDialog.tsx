@@ -70,6 +70,11 @@ export interface WhisperXParams {
     print_progress: boolean;
     attention_context_left: number;
     attention_context_right: number;
+    nvidia_chunk_duration: number;
+    nvidia_timestamps?: boolean;
+    nvidia_target_language?: string;
+    nvidia_precision: string;
+    nvidia_prompt?: string;
     is_multi_track_enabled: boolean;
     api_key?: string;
     max_new_tokens?: number;
@@ -127,6 +132,11 @@ const DEFAULT_PARAMS: WhisperXParams = {
     print_progress: false,
     attention_context_left: 256,
     attention_context_right: 256,
+    nvidia_chunk_duration: 300,
+    nvidia_timestamps: true,
+    nvidia_target_language: "en",
+    nvidia_precision: "float16",
+    nvidia_prompt: "",
     is_multi_track_enabled: false,
     api_key: "",
 };
@@ -202,6 +212,18 @@ const CANARY_LANGUAGES = [
     { value: "de", label: "German" },
     { value: "es", label: "Spanish" },
     { value: "fr", label: "French" },
+    { value: "hi", label: "Hindi" },
+    { value: "it", label: "Italian" },
+    { value: "ja", label: "Japanese" },
+    { value: "ko", label: "Korean" },
+    { value: "pl", label: "Polish" },
+    { value: "pt", label: "Portuguese" },
+    { value: "ru", label: "Russian" },
+    { value: "zh", label: "Chinese" },
+];
+
+const CANARY_QWEN_LANGUAGES = [
+    { value: "en", label: "English" },
 ];
 
 const PARAM_DESCRIPTIONS = {
@@ -220,6 +242,11 @@ const PARAM_DESCRIPTIONS = {
     hf_token: "Required for Pyannote diarization models.",
     vad_onset: "Voice detection sensitivity. Lower values (0.3-0.4) catch quieter/distant speakers.",
     vad_offset: "Speech ending sensitivity. Lower values detect speech endings more precisely.",
+    nvidia_chunk_duration: "Audio chunk length sent to the NVIDIA model. Smaller chunks use less VRAM.",
+    nvidia_timestamps: "Request timestamp output when the NVIDIA model supports it.",
+    nvidia_precision: "Lower precision reduces VRAM usage on supported GPUs.",
+    nvidia_prompt: "Prompt used by Canary-Qwen for transcription generation.",
+    max_new_tokens: "Maximum tokens generated for each audio chunk.",
 };
 
 // ============================================================================
@@ -266,8 +293,44 @@ export const TranscriptionConfigDialog = memo(function TranscriptionConfigDialog
     const updateParam = <K extends keyof WhisperXParams>(key: K, value: WhisperXParams[K]) => {
         setParams(prev => {
             const newParams = { ...prev, [key]: value };
-            if (key === 'model_family' && value === 'whisper') {
-                newParams.diarize_model = 'pyannote';
+            if (key === 'model_family') {
+                const family = value as string;
+                if (family === 'whisper') {
+                    newParams.device = 'cpu';
+                    newParams.diarize_model = 'pyannote';
+                    newParams.batch_size = 8;
+                    newParams.nvidia_chunk_duration = 300;
+                    newParams.nvidia_timestamps = true;
+                } else if (family === 'nvidia_parakeet') {
+                    newParams.device = 'auto';
+                    newParams.task = 'transcribe';
+                    newParams.language = 'en';
+                    newParams.batch_size = 1;
+                    newParams.nvidia_chunk_duration = 300;
+                    newParams.nvidia_timestamps = true;
+                    newParams.attention_context_left = 256;
+                    newParams.attention_context_right = 256;
+                    newParams.nvidia_precision = 'float16';
+                } else if (family === 'nvidia_canary') {
+                    newParams.device = 'auto';
+                    newParams.task = 'transcribe';
+                    newParams.language = newParams.language || 'en';
+                    newParams.batch_size = 1;
+                    newParams.nvidia_chunk_duration = 300;
+                    newParams.nvidia_timestamps = true;
+                    newParams.nvidia_target_language = 'en';
+                    newParams.nvidia_precision = 'float16';
+                } else if (family === 'nvidia_canary_qwen') {
+                    newParams.device = 'auto';
+                    newParams.task = 'transcribe';
+                    newParams.language = 'en';
+                    newParams.batch_size = 1;
+                    newParams.nvidia_chunk_duration = 40;
+                    newParams.nvidia_timestamps = true;
+                    newParams.nvidia_precision = 'float16';
+                    newParams.max_new_tokens = 256;
+                    newParams.nvidia_prompt = 'Transcribe the following:';
+                }
             }
             return newParams;
         });
@@ -370,6 +433,7 @@ export const TranscriptionConfigDialog = memo(function TranscriptionConfigDialog
                             { value: "whisper", label: "Whisper" },
                             { value: "nvidia_parakeet", label: "NVIDIA Parakeet" },
                             { value: "nvidia_canary", label: "NVIDIA Canary" },
+                            { value: "nvidia_canary_qwen", label: "NVIDIA Canary-Qwen" },
                             { value: "mistral_voxtral", label: "Mistral Voxtral" },
                             { value: "openai", label: "OpenAI" },
                         ]}
@@ -391,6 +455,9 @@ export const TranscriptionConfigDialog = memo(function TranscriptionConfigDialog
                     )}
                     {params.model_family === "nvidia_canary" && (
                         <CanaryConfig params={params} updateParam={updateParam} isMultiTrack={isMultiTrack} />
+                    )}
+                    {params.model_family === "nvidia_canary_qwen" && (
+                        <CanaryQwenConfig params={params} updateParam={updateParam} isMultiTrack={isMultiTrack} />
                     )}
                     {params.model_family === "openai" && (
                         <OpenAIConfig
@@ -605,6 +672,33 @@ function ParakeetConfig({ params, updateParam, isMultiTrack }: ConfigProps) {
             {!isMultiTrack && (
                 <DiarizationSection id="parakeet_diarize" params={params} updateParam={updateParam} />
             )}
+
+            <AdvancedAccordion>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <FormField label="Batch Size" description={PARAM_DESCRIPTIONS.batch_size}>
+                        <Input
+                            type="number" min={1} max={8}
+                            value={params.batch_size}
+                            onChange={(e) => updateParam('batch_size', parseInt(e.target.value) || 1)}
+                            className={inputClassName}
+                        />
+                    </FormField>
+                    <FormField label="Long Audio Chunk" description={PARAM_DESCRIPTIONS.nvidia_chunk_duration}>
+                        <Input
+                            type="number" min={30} max={1800} step={30}
+                            value={params.nvidia_chunk_duration || 300}
+                            onChange={(e) => updateParam('nvidia_chunk_duration', parseInt(e.target.value) || 300)}
+                            className={inputClassName}
+                        />
+                    </FormField>
+                </div>
+                <SwitchField
+                    id="parakeet_timestamps"
+                    label="Timestamp output"
+                    checked={params.nvidia_timestamps ?? true}
+                    onCheckedChange={(v) => updateParam('nvidia_timestamps', v)}
+                />
+            </AdvancedAccordion>
         </div>
     );
 }
@@ -613,12 +707,112 @@ function CanaryConfig({ params, updateParam, isMultiTrack }: ConfigProps) {
     return (
         <div className="space-y-6">
             <Section title="Language Settings">
-                <SelectField label="Source Language" value={params.language || "en"} onValueChange={(v) => updateParam('language', v)} options={CANARY_LANGUAGES} />
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <SelectField label="Task" value={params.task} onValueChange={(v) => updateParam('task', v)} options={[{ value: "transcribe", label: "Transcribe" }, { value: "translate", label: "Translate" }]} />
+                    <SelectField label="Source Language" value={params.language || "en"} onValueChange={(v) => updateParam('language', v)} options={CANARY_LANGUAGES} />
+                    {params.task === "translate" && (
+                        <SelectField label="Target Language" value={params.nvidia_target_language || "en"} onValueChange={(v) => updateParam('nvidia_target_language', v)} options={CANARY_LANGUAGES} />
+                    )}
+                </div>
             </Section>
 
             {!isMultiTrack && (
                 <DiarizationSection id="canary_diarize" params={params} updateParam={updateParam} />
             )}
+
+            <AdvancedAccordion>
+                <FormField label="Batch Size" description={PARAM_DESCRIPTIONS.batch_size}>
+                    <Input
+                        type="number" min={1} max={8}
+                        value={params.batch_size}
+                        onChange={(e) => updateParam('batch_size', parseInt(e.target.value) || 1)}
+                        className={inputClassName}
+                    />
+                </FormField>
+                <SwitchField
+                    id="canary_timestamps"
+                    label="Timestamp output"
+                    checked={params.nvidia_timestamps ?? true}
+                    onCheckedChange={(v) => updateParam('nvidia_timestamps', v)}
+                />
+            </AdvancedAccordion>
+        </div>
+    );
+}
+
+function CanaryQwenConfig({ params, updateParam, isMultiTrack }: ConfigProps) {
+    return (
+        <div className="space-y-6">
+            <InfoBanner variant="warning" title="Chunk-Level Timing">
+                Canary-Qwen returns text with chunk-level segments, not word-level timestamps.
+            </InfoBanner>
+
+            <Section title="Language Settings">
+                <SelectField label="Language" value={params.language || "en"} onValueChange={(v) => updateParam('language', v)} options={CANARY_QWEN_LANGUAGES} />
+            </Section>
+
+            {!isMultiTrack && (
+                <DiarizationSection id="canary_qwen_diarize" params={params} updateParam={updateParam} />
+            )}
+
+            <AdvancedAccordion>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <FormField label="Batch Size" description={PARAM_DESCRIPTIONS.batch_size}>
+                        <Input
+                            type="number" min={1} max={8}
+                            value={params.batch_size}
+                            onChange={(e) => updateParam('batch_size', parseInt(e.target.value) || 1)}
+                            className={inputClassName}
+                        />
+                    </FormField>
+                    <FormField label="Chunk Length" description={PARAM_DESCRIPTIONS.nvidia_chunk_duration}>
+                        <Input
+                            type="number" min={10} max={120} step={5}
+                            value={params.nvidia_chunk_duration || 40}
+                            onChange={(e) => updateParam('nvidia_chunk_duration', parseInt(e.target.value) || 40)}
+                            className={inputClassName}
+                        />
+                    </FormField>
+                    <FormField label="Max Tokens" description={PARAM_DESCRIPTIONS.max_new_tokens}>
+                        <Input
+                            type="number" min={64} max={2048} step={64}
+                            value={params.max_new_tokens || 256}
+                            onChange={(e) => updateParam('max_new_tokens', parseInt(e.target.value) || 256)}
+                            className={inputClassName}
+                        />
+                    </FormField>
+                    <SelectField
+                        label="Precision"
+                        description={PARAM_DESCRIPTIONS.nvidia_precision}
+                        value={params.nvidia_precision || "float16"}
+                        onValueChange={(v) => updateParam('nvidia_precision', v)}
+                        options={[{ value: "float16", label: "Float16" }, { value: "bfloat16", label: "BFloat16" }, { value: "float32", label: "Float32" }]}
+                    />
+                    <SelectField
+                        label="Device"
+                        description={PARAM_DESCRIPTIONS.device}
+                        value={params.device || "auto"}
+                        onValueChange={(v) => updateParam('device', v)}
+                        options={[{ value: "auto", label: "Auto" }, { value: "cuda", label: "GPU (CUDA)" }, { value: "cpu", label: "CPU" }]}
+                    />
+                </div>
+
+                <FormField label="Prompt" description={PARAM_DESCRIPTIONS.nvidia_prompt}>
+                    <Textarea
+                        value={params.nvidia_prompt || "Transcribe the following:"}
+                        onChange={(e) => updateParam('nvidia_prompt', e.target.value || undefined)}
+                        className={`${inputClassName} resize-none min-h-[80px]`}
+                        rows={2}
+                    />
+                </FormField>
+
+                <SwitchField
+                    id="canary_qwen_timestamps"
+                    label="Chunk timestamp output"
+                    checked={params.nvidia_timestamps ?? true}
+                    onCheckedChange={(v) => updateParam('nvidia_timestamps', v)}
+                />
+            </AdvancedAccordion>
         </div>
     );
 }

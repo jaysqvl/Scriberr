@@ -132,6 +132,20 @@ export function Dashboard() {
 		};
 	}, [handleFileSelect, openMultiTrackDialog]);
 
+	const totalUploadBytes = uploadProgress.reduce((sum, item) => sum + (item.totalBytes || 0), 0);
+	const uploadedBytes = uploadProgress.reduce((sum, item) => sum + (item.uploadedBytes || (item.status === 'success' ? item.totalBytes || 0 : 0)), 0);
+	const overallUploadProgress = totalUploadBytes > 0
+		? (uploadedBytes / totalUploadBytes) * 100
+		: uploadProgress.length > 0
+			? (uploadProgress.filter(p => p.status !== 'uploading').length / uploadProgress.length) * 100
+			: 0;
+
+	const formatBytes = (bytes?: number) => {
+		if (!bytes) return "0 MB";
+		if (bytes >= 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
+		return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+	};
+
 	return (
 		<MainLayout
 			className="min-h-screen bg-[var(--bg-main)]"
@@ -161,7 +175,7 @@ export function Dashboard() {
 					{/* Overall progress */}
 					<div className="mb-6">
 						<Progress
-							value={(uploadProgress.filter(p => p.status !== 'uploading').length / uploadProgress.length) * 100}
+							value={overallUploadProgress}
 							className="h-2 bg-[var(--secondary)]"
 							indicatorClassName="bg-gradient-to-r from-[var(--brand-solid)] to-[var(--brand-solid)]"
 						/>
@@ -191,9 +205,14 @@ export function Dashboard() {
 											{progress.error}
 										</div>
 									)}
+									{progress.status === 'uploading' && progress.totalBytes !== undefined && (
+										<div className="text-[var(--text-tertiary)] text-xs mt-0.5">
+											{formatBytes(progress.uploadedBytes)} / {formatBytes(progress.totalBytes)}
+										</div>
+									)}
 								</div>
 								<div className="flex-shrink-0 text-xs font-medium text-[var(--text-tertiary)]">
-									{progress.status === 'uploading' && 'Uploading...'}
+									{progress.status === 'uploading' && `${Math.round(progress.progress || 0)}%`}
 									{progress.status === 'success' && 'Completed'}
 									{progress.status === 'error' && 'Failed'}
 								</div>

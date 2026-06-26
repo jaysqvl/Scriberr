@@ -19,6 +19,9 @@ interface FileWithType {
 interface UploadProgress {
     fileName: string;
     status: "uploading" | "success" | "error";
+    progress?: number;
+    uploadedBytes?: number;
+    totalBytes?: number;
     error?: string;
 }
 
@@ -108,13 +111,31 @@ export function GlobalUploadProvider({ children }: PropsWithChildren) {
                 const isVideo = fileItem.isVideo;
 
                 try {
-                    await uploadFile({ file, isVideo });
+                    await uploadFile({
+                        file,
+                        isVideo,
+                        onProgress: (progress) => {
+                            if (!isOnDashboard) return;
+                            setUploadProgress((prev) =>
+                                prev.map((item, index) =>
+                                    index === i
+                                        ? {
+                                            ...item,
+                                            progress: progress.percentage,
+                                            uploadedBytes: progress.uploadedBytes,
+                                            totalBytes: progress.totalBytes,
+                                        }
+                                        : item
+                                )
+                            );
+                        },
+                    });
 
                     if (isOnDashboard) {
                         setUploadProgress((prev) =>
                             prev.map((item, index) =>
                                 index === i
-                                    ? { ...item, status: "success", error: undefined }
+                                    ? { ...item, status: "success", progress: 100, error: undefined }
                                     : item
                             )
                         );
@@ -182,13 +203,33 @@ export function GlobalUploadProvider({ children }: PropsWithChildren) {
             }
 
             try {
-                await uploadMultiTrack({ files, aupFile, title });
+                await uploadMultiTrack({
+                    files,
+                    aupFile,
+                    title,
+                    onProgress: (progress) => {
+                        if (!isOnDashboard) return;
+                        setUploadProgress((prev) =>
+                            prev.map((item, index) =>
+                                index === 0
+                                    ? {
+                                        ...item,
+                                        progress: progress.percentage,
+                                        uploadedBytes: progress.uploadedBytes,
+                                        totalBytes: progress.totalBytes,
+                                    }
+                                    : item
+                            )
+                        );
+                    },
+                });
 
                 if (isOnDashboard) {
                     setUploadProgress([
                         {
                             fileName: `${title} (${files.length} tracks)`,
                             status: "success",
+                            progress: 100,
                         },
                     ]);
                     setTimeout(() => setUploadProgress([]), 3000);

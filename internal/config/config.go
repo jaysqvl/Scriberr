@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"scriberr/pkg/logger"
@@ -25,9 +26,11 @@ type Config struct {
 	JWTSecret string
 
 	// File storage
-	UploadDir      string
-	TranscriptsDir string
-	TempDir        string
+	UploadDir             string
+	TranscriptsDir        string
+	TempDir               string
+	UploadChunkSizeBytes  int64
+	UploadSessionTTLHours int
 
 	// Python/WhisperX configuration
 	WhisperXEnv string
@@ -36,6 +39,15 @@ type Config struct {
 	Environment    string
 	AllowedOrigins []string
 	SecureCookies  bool // Explicit control over Secure flag (for HTTPS deployments)
+	TrustedProxies []string
+
+	// Authentication abuse protection
+	AuthRateLimitEnabled     bool
+	AuthMaxFailedAttempts    int
+	AuthFailureWindowSeconds int
+	AuthLockoutSeconds       int
+	AuthIPMaxFailedAttempts  int
+
 	// OpenAI configuration
 	OpenAIAPIKey string
 
@@ -56,20 +68,31 @@ func Load() *Config {
 		defaultSecure = "true"
 	}
 
+	chunkSizeMB := clampInt(getEnvInt("UPLOAD_CHUNK_SIZE_MB", 50), 1, 90)
+	sessionTTLHours := clampInt(getEnvInt("UPLOAD_SESSION_TTL_HOURS", 48), 1, 24*14)
+
 	return &Config{
-		Port:           getEnv("PORT", "8080"),
-		Host:           getEnv("HOST", "0.0.0.0"),
-		Environment:    getEnv("APP_ENV", "development"),
-		AllowedOrigins: strings.Split(getEnv("ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:8080"), ","),
-		DatabasePath:   getEnv("DATABASE_PATH", "data/scriberr.db"),
-		JWTSecret:      getJWTSecret(),
-		UploadDir:      getEnv("UPLOAD_DIR", "data/uploads"),
-		TranscriptsDir: getEnv("TRANSCRIPTS_DIR", "data/transcripts"),
-		TempDir:        getEnv("TEMP_DIR", "data/temp"),
-		WhisperXEnv:    getEnv("WHISPERX_ENV", "data/whisperx-env"),
-		SecureCookies:  getEnv("SECURE_COOKIES", defaultSecure) == "true",
-		OpenAIAPIKey:   getEnv("OPENAI_API_KEY", ""),
-		HFToken:        getEnv("HF_TOKEN", ""),
+		Port:                     getEnv("PORT", "8080"),
+		Host:                     getEnv("HOST", "0.0.0.0"),
+		Environment:              getEnv("APP_ENV", "development"),
+		AllowedOrigins:           strings.Split(getEnv("ALLOWED_ORIGINS", "http://localhost:5173,http://localhost:8080"), ","),
+		DatabasePath:             getEnv("DATABASE_PATH", "data/scriberr.db"),
+		JWTSecret:                getJWTSecret(),
+		UploadDir:                getEnv("UPLOAD_DIR", "data/uploads"),
+		TranscriptsDir:           getEnv("TRANSCRIPTS_DIR", "data/transcripts"),
+		TempDir:                  getEnv("TEMP_DIR", "data/temp"),
+		UploadChunkSizeBytes:     int64(chunkSizeMB) * 1024 * 1024,
+		UploadSessionTTLHours:    sessionTTLHours,
+		WhisperXEnv:              getEnv("WHISPERX_ENV", "data/whisperx-env"),
+		SecureCookies:            getEnv("SECURE_COOKIES", defaultSecure) == "true",
+		TrustedProxies:           splitCSV(getEnv("TRUSTED_PROXIES", "")),
+		AuthRateLimitEnabled:     getEnvBool("AUTH_RATE_LIMIT_ENABLED", true),
+		AuthMaxFailedAttempts:    getEnvInt("AUTH_MAX_FAILED_ATTEMPTS", 5),
+		AuthFailureWindowSeconds: getEnvInt("AUTH_FAILURE_WINDOW_SECONDS", 600),
+		AuthLockoutSeconds:       getEnvInt("AUTH_LOCKOUT_SECONDS", 900),
+		AuthIPMaxFailedAttempts:  getEnvInt("AUTH_IP_MAX_FAILED_ATTEMPTS", 20),
+		OpenAIAPIKey:             getEnv("OPENAI_API_KEY", ""),
+		HFToken:                  getEnv("HF_TOKEN", ""),
 	}
 }
 
@@ -84,6 +107,50 @@ func getEnv(key, defaultValue string) string {
 		return value
 	}
 	return defaultValue
+}
+
+func getEnvInt(key string, defaultValue int) int {
+	if value := os.Getenv(key); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err == nil {
+			return parsed
+		}
+		logger.Warn("Invalid integer environment variable, using default", "key", key, "value", value, "default", defaultValue)
+	}
+	return defaultValue
+}
+
+func getEnvBool(key string, defaultValue bool) bool {
+	if value := os.Getenv(key); value != "" {
+		parsed, err := strconv.ParseBool(value)
+		if err == nil {
+			return parsed
+		}
+		logger.Warn("Invalid boolean environment variable, using default", "key", key, "value", value, "default", defaultValue)
+	}
+	return defaultValue
+}
+
+func splitCSV(value string) []string {
+	parts := strings.Split(value, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			result = append(result, part)
+		}
+	}
+	return result
+}
+
+func clampInt(value, minValue, maxValue int) int {
+	if value < minValue {
+		return minValue
+	}
+	if value > maxValue {
+		return maxValue
+	}
+	return value
 }
 
 // getJWTSecret gets JWT secret from env or generates a secure random one
