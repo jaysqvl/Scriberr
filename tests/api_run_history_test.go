@@ -1,0 +1,107 @@
+package tests
+
+import (
+	"encoding/json"
+	"net/http"
+	"time"
+
+	"scriberr/internal/models"
+
+	"github.com/stretchr/testify/assert"
+)
+
+func (suite *APIHandlerTestSuite) TestRunHistoryEndpointsReturnExecutionTranscript() {
+	job := suite.helper.CreateTestTranscriptionJob(suite.T(), "run history")
+	transcript := `{"text":"hello from run one","segments":[{"start":0,"end":1,"text":"hello from run one"}]}`
+	completedAt := time.Now()
+	logPath := "/etc/passwd"
+	execution := &models.TranscriptionJobExecution{
+		TranscriptionJobID: job.ID,
+		StartedAt:          completedAt.Add(-2 * time.Minute),
+		CompletedAt:        &completedAt,
+		ActualParameters: models.WhisperXParams{
+			ModelFamily:     "nvidia_canary",
+			Device:          "cuda",
+			BatchSize:       1,
+			NvidiaPrecision: "bfloat16",
+		},
+		Status:     models.StatusCompleted,
+		Transcript: &transcript,
+		LogPath:    &logPath,
+	}
+	execution.CalculateProcessingDuration()
+	assert.NoError(suite.T(), suite.helper.DB.Create(execution).Error)
+
+	w := suite.makeAuthenticatedRequest(http.MethodGet, "/api/v1/transcription/"+job.ID+"/runs", nil, true)
+	assert.Equal(suite.T(), http.StatusOK, w.Code)
+
+	var listResponse struct {
+		Runs []struct {
+			ID            string `json:"id"`
+			RunNumber     int    `json:"run_number"`
+			HasTranscript bool   `json:"has_transcript"`
+			HasLogs       bool   `json:"has_logs"`
+		} `json:"runs"`
+	}
+	assert.NoError(suite.T(), json.Unmarshal(w.Body.Bytes(), &listResponse))
+	assert.Len(suite.T(), listResponse.Runs, 1)
+	assert.Equal(suite.T(), execution.ID, listResponse.Runs[0].ID)
+	assert.Equal(suite.T(), 1, listResponse.Runs[0].RunNumber)
+	assert.True(suite.T(), listResponse.Runs[0].HasTranscript)
+	assert.True(suite.T(), listResponse.Runs[0].HasLogs)
+
+	var rawListResponse map[string]interface{}
+	assert.NoError(suite.T(), json.Unmarshal(w.Body.Bytes(), &rawListResponse))
+	runMetadata := rawListResponse["runs"].([]interface{})[0].(map[string]interface{})
+	assert.NotContains(suite.T(), runMetadata, "log_path")
+
+	w = suite.makeAuthenticatedRequest(http.MethodGet, "/api/v1/transcription/"+job.ID+"/runs/"+execution.ID+"/transcript", nil, true)
+	assert.Equal(suite.T(), http.StatusOK, w.Code)
+
+	var transcriptResponse struct {
+		Available  bool `json:"available"`
+		Transcript struct {
+			Text string `json:"text"`
+		} `json:"transcript"`
+	}
+	assert.NoError(suite.T(), json.Unmarshal(w.Body.Bytes(), &transcriptResponse))
+	assert.True(suite.T(), transcriptResponse.Available)
+	assert.Equal(suite.T(), "hello from run one", transcriptResponse.Transcript.Text)
+
+	w = suite.makeAuthenticatedRequest(http.MethodGet, "/api/v1/transcription/"+job.ID+"/runs/"+execution.ID+"/logs", nil, true)
+	assert.Equal(suite.T(), http.StatusForbidden, w.Code)
+}
+
+func (suite *APIHandlerTestSuite) TestRerunSnapshotsLegacyTranscriptBeforeQueueing() {
+	job := suite.helper.CreateTestTranscriptionJob(suite.T(), "legacy result")
+	transcript := `{"text":"old result"}`
+	job.Status = models.StatusCompleted
+	job.Transcript = &transcript
+	job.Parameters = models.WhisperXParams{
+		ModelFamily: "whisper",
+		Model:       "base",
+		Device:      "cpu",
+		BatchSize:   8,
+	}
+	assert.NoError(suite.T(), suite.helper.DB.Save(job).Error)
+
+	nextParams := models.WhisperXParams{
+		ModelFamily: "nvidia_canary",
+		Device:      "cuda",
+		BatchSize:   1,
+	}
+	w := suite.makeAuthenticatedRequest(http.MethodPost, "/api/v1/transcription/"+job.ID+"/rerun", nextParams, true)
+	assert.Equal(suite.T(), http.StatusOK, w.Code)
+
+	var executions []models.TranscriptionJobExecution
+	assert.NoError(suite.T(), suite.helper.DB.Where("transcription_job_id = ?", job.ID).Find(&executions).Error)
+	assert.Len(suite.T(), executions, 1)
+	assert.NotNil(suite.T(), executions[0].Transcript)
+	assert.Equal(suite.T(), transcript, *executions[0].Transcript)
+
+	var updatedJob models.TranscriptionJob
+	assert.NoError(suite.T(), suite.helper.DB.First(&updatedJob, "id = ?", job.ID).Error)
+	assert.Equal(suite.T(), models.StatusPending, updatedJob.Status)
+	assert.Nil(suite.T(), updatedJob.Transcript)
+	assert.Equal(suite.T(), "nvidia_canary", updatedJob.Parameters.ModelFamily)
+}

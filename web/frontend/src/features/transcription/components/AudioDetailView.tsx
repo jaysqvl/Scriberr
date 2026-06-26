@@ -1,7 +1,8 @@
 import { useRef, useState, useEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { useParams, useNavigate } from "react-router-dom";
-import { MoreVertical, Edit2, Activity, FileText, Bot, Check, Loader2, List, AlignLeft, ArrowDownCircle, StickyNote, MessageCircle, FileImage, FileJson, Clock, AlertCircle, Users } from "lucide-react";
+import { useQueryClient } from "@tanstack/react-query";
+import { MoreVertical, Edit2, Activity, FileText, Bot, Check, Loader2, List, AlignLeft, ArrowDownCircle, StickyNote, MessageCircle, FileImage, FileJson, Clock, AlertCircle, Users, RefreshCw } from "lucide-react";
 import { Header } from "@/components/Header";
 
 import { Button } from "@/components/ui/button";
@@ -15,6 +16,8 @@ import { cn } from "@/lib/utils";
 import { useAudioDetail, useUpdateTitle, useTranscript, type TranscriptSegment } from "@/features/transcription/hooks/useAudioDetail";
 import { useSpeakerMappings } from "@/features/transcription/hooks/useTranscriptionSpeakers";
 import { useTranscriptDownload } from "@/features/transcription/hooks/useTranscriptDownload";
+import { useAuth } from "@/features/auth/hooks/useAuth";
+import { TranscriptionConfigDialog, type WhisperXParams } from "@/components/TranscriptionConfigDialog";
 
 // Sub-components
 import { TranscriptSection } from "./audio-detail/TranscriptSection";
@@ -33,6 +36,8 @@ export const AudioDetailView = function AudioDetailView({ audioId: propAudioId }
     const { audioId: paramAudioId } = useParams<{ audioId: string }>();
     const audioId = propAudioId || paramAudioId;
     const navigate = useNavigate();
+    const queryClient = useQueryClient();
+    const { getAuthHeaders } = useAuth();
 
     // Refs
     const audioPlayerRef = useRef<EmberPlayerRef>(null);
@@ -55,6 +60,8 @@ export const AudioDetailView = function AudioDetailView({ audioId: propAudioId }
     const [executionDialogOpen, setExecutionDialogOpen] = useState(false);
     const [logsDialogOpen, setLogsDialogOpen] = useState(false);
     const [summaryDialogOpen, setSummaryDialogOpen] = useState(false);
+    const [rerunDialogOpen, setRerunDialogOpen] = useState(false);
+    const [rerunLoading, setRerunLoading] = useState(false);
 
     // Data Fetching
     const { data: audioFile, isLoading, error } = useAudioDetail(audioId || "");
@@ -132,6 +139,49 @@ export const AudioDetailView = function AudioDetailView({ audioId: propAudioId }
             setCurrentTime(time);
         }
     };
+
+    const handleRerun = useCallback(async (params: WhisperXParams) => {
+        if (!audioId || !audioFile) return;
+
+        if (audioFile.is_multi_track && !params.is_multi_track_enabled) {
+            alert("Multi-track audio requires multi-track transcription to be enabled.");
+            return;
+        }
+        if (!audioFile.is_multi_track && params.is_multi_track_enabled) {
+            alert("Multi-track transcription cannot be used with a single-track audio file.");
+            return;
+        }
+
+        try {
+            setRerunLoading(true);
+            const response = await fetch(`/api/v1/transcription/${audioId}/rerun`, {
+                method: "POST",
+                headers: {
+                    ...getAuthHeaders(),
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify(params),
+            });
+            if (!response.ok) {
+                const errorText = await response.text();
+                throw new Error(errorText || "Failed to start rerun");
+            }
+
+            setRerunDialogOpen(false);
+            await Promise.all([
+                queryClient.invalidateQueries({ queryKey: ["audio", audioId] }),
+                queryClient.invalidateQueries({ queryKey: ["transcript", audioId] }),
+                queryClient.invalidateQueries({ queryKey: ["executionRuns", audioId] }),
+                queryClient.invalidateQueries({ queryKey: ["executionData", audioId] }),
+                queryClient.invalidateQueries({ queryKey: ["logs", audioId] }),
+                queryClient.invalidateQueries({ queryKey: ["audioFiles"] }),
+            ]);
+        } catch (err) {
+            alert(err instanceof Error ? err.message : "Error starting rerun");
+        } finally {
+            setRerunLoading(false);
+        }
+    }, [audioId, audioFile, getAuthHeaders, queryClient]);
 
     if (!audioId) return <div>Invalid Audio ID</div>;
 
@@ -284,6 +334,16 @@ export const AudioDetailView = function AudioDetailView({ audioId: propAudioId }
                                                 <MessageCircle className="h-4 w-4" />
                                                 <span className="hidden sm:inline">Chat</span>
                                             </Button>
+                                            <Button
+                                                variant="outline"
+                                                size="sm"
+                                                onClick={() => setRerunDialogOpen(true)}
+                                                disabled={audioFile.status === "processing" || audioFile.status === "pending"}
+                                                className="rounded-full border-[var(--border-subtle)] shadow-sm bg-[var(--bg-card)] hover:bg-[var(--bg-main)] transition-all gap-2 px-3"
+                                            >
+                                                <RefreshCw className="h-4 w-4" />
+                                                <span className="hidden sm:inline">Run Again</span>
+                                            </Button>
 
                                             <DropdownMenu>
                                                 <DropdownMenuTrigger asChild>
@@ -342,8 +402,15 @@ export const AudioDetailView = function AudioDetailView({ audioId: propAudioId }
                                                         <FileJson className="mr-2 h-4 w-4 opacity-70" /> Download JSON
                                                     </DropdownMenuItem>
                                                     <DropdownMenuSeparator className="bg-[var(--border-subtle)] my-1" />
+                                                    <DropdownMenuItem
+                                                        onClick={() => setRerunDialogOpen(true)}
+                                                        disabled={audioFile.status === "processing" || audioFile.status === "pending"}
+                                                        className="rounded-[8px] cursor-pointer"
+                                                    >
+                                                        <RefreshCw className="mr-2 h-4 w-4 opacity-70" /> Run Again
+                                                    </DropdownMenuItem>
                                                     <DropdownMenuItem onClick={() => setExecutionDialogOpen(true)} className="rounded-[8px] cursor-pointer">
-                                                        <Activity className="mr-2 h-4 w-4 opacity-70" /> Execution Info
+                                                        <Activity className="mr-2 h-4 w-4 opacity-70" /> Runs
                                                     </DropdownMenuItem>
                                                     <DropdownMenuItem onClick={() => setLogsDialogOpen(true)} className="rounded-[8px] cursor-pointer">
                                                         <FileText className="mr-2 h-4 w-4 opacity-70" /> View Logs
@@ -439,6 +506,15 @@ export const AudioDetailView = function AudioDetailView({ audioId: propAudioId }
                 isOpen={summaryDialogOpen}
                 onClose={setSummaryDialogOpen}
                 llmReady={true}
+            />
+            <TranscriptionConfigDialog
+                open={rerunDialogOpen}
+                onOpenChange={setRerunDialogOpen}
+                onStartTranscription={handleRerun}
+                loading={rerunLoading}
+                initialParams={audioFile.parameters as WhisperXParams | undefined}
+                isMultiTrack={audioFile.is_multi_track}
+                title="Run Again"
             />
 
             {/* Mobile / Overlay Chat */}

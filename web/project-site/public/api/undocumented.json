@@ -135,6 +135,13 @@
     },
     {
       "method": "POST",
+      "path": "/api/v1/transcription/{id}/rerun",
+      "summary": "",
+      "description": "",
+      "tag": ""
+    },
+    {
+      "method": "POST",
       "path": "/api/v1/transcription/{id}/kill",
       "summary": "Kill running transcription job",
       "description": "Cancel a currently running transcription job",
@@ -419,6 +426,27 @@
       "summary": "Validate OpenAI API Key",
       "description": "Validate the provided OpenAI API key and return available Whisper models",
       "tag": "config"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/transcription/{id}/runs",
+      "summary": "List transcription runs",
+      "description": "List every transcription attempt for a job, including timing, status, and captured parameter metadata",
+      "tag": "transcription"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/transcription/{id}/runs/{run_id}/transcript",
+      "summary": "Get run transcript",
+      "description": "Get the transcript snapshot captured for a specific transcription run",
+      "tag": "transcription"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/transcription/{id}/runs/{run_id}/logs",
+      "summary": "Get run logs",
+      "description": "Get the log snapshot captured for a specific transcription run",
+      "tag": "transcription"
     },
     {
       "method": "GET",

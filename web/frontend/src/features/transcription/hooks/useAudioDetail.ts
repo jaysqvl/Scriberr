@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/features/auth/hooks/useAuth";
+import type { WhisperXParams } from "@/components/TranscriptionConfigDialog";
 
 
 // Types
@@ -41,8 +42,23 @@ export interface ExecutionData {
     message?: string;
 }
 
+export interface ExecutionRun extends ExecutionData {
+    id: string;
+    run_number: number;
+    actual_parameters?: WhisperXParams;
+    has_transcript?: boolean;
+    has_logs?: boolean;
+}
+
+export interface ExecutionRunsData {
+    job_id: string;
+    active_run_id?: string;
+    runs: ExecutionRun[];
+}
+
 export interface LogsData {
     job_id: string;
+    run_id?: string;
     available: boolean;
     content: string;
     message?: string;
@@ -88,6 +104,37 @@ export interface Transcript {
     word_segments?: WordSegment[];
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function normalizeTranscript(data: any): Transcript | null {
+    if (data.available === false || !data.transcript) {
+        return null;
+    }
+
+    if (typeof data.transcript === "string") {
+        return { text: data.transcript };
+    }
+    if (data.transcript.text) {
+        return {
+            text: data.transcript.text,
+            segments: data.transcript.segments,
+            word_segments: data.transcript.word_segments,
+        };
+    }
+    if (data.transcript.segments) {
+        const fullText = data.transcript.segments
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            .map((segment: any) => segment.text)
+            .join(" ");
+        return {
+            text: fullText,
+            segments: data.transcript.segments,
+            word_segments: data.transcript.word_segments,
+        };
+    }
+
+    return { text: "" };
+}
+
 export function useAudioDetail(audioId: string) {
     const { getAuthHeaders } = useAuth();
 
@@ -122,34 +169,7 @@ export function useTranscript(audioId: string, enabled: boolean) {
             });
             if (!response.ok) throw new Error("Failed to fetch transcript");
             const data = await response.json();
-
-            // Handle graceful empty responses (available=false)
-            if (data.available === false || !data.transcript) {
-                return null; // Return null to indicate no transcript
-            }
-
-            // Normalize transcript structure
-            if (typeof data.transcript === "string") {
-                return { text: data.transcript } as Transcript;
-            } else if (data.transcript.text) {
-                return {
-                    text: data.transcript.text,
-                    segments: data.transcript.segments,
-                    word_segments: data.transcript.word_segments,
-                } as Transcript;
-            } else if (data.transcript.segments) {
-                const fullText = data.transcript.segments
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    .map((segment: any) => segment.text)
-                    .join(" ");
-                return {
-                    text: fullText,
-                    segments: data.transcript.segments,
-                    word_segments: data.transcript.word_segments,
-                } as Transcript;
-            }
-
-            return { text: "" } as Transcript;
+            return normalizeTranscript(data);
         },
         enabled: enabled,
     });
@@ -167,6 +187,52 @@ export function useExecutionData(audioId: string) {
             return response.json() as Promise<ExecutionData>;
         },
         enabled: !!audioId,
+    });
+}
+
+export function useExecutionRuns(audioId: string, enabled = true) {
+    const { getAuthHeaders } = useAuth();
+    return useQuery({
+        queryKey: ["executionRuns", audioId],
+        queryFn: async () => {
+            const response = await fetch(`/api/v1/transcription/${audioId}/runs`, {
+                headers: getAuthHeaders(),
+            });
+            if (!response.ok) throw new Error("Failed to fetch execution runs");
+            return response.json() as Promise<ExecutionRunsData>;
+        },
+        enabled: enabled && !!audioId,
+    });
+}
+
+export function useRunTranscript(audioId: string, runId?: string, enabled = true) {
+    const { getAuthHeaders } = useAuth();
+    return useQuery({
+        queryKey: ["runTranscript", audioId, runId],
+        queryFn: async () => {
+            const response = await fetch(`/api/v1/transcription/${audioId}/runs/${runId}/transcript`, {
+                headers: getAuthHeaders(),
+            });
+            if (!response.ok) throw new Error("Failed to fetch run transcript");
+            const data = await response.json();
+            return normalizeTranscript(data);
+        },
+        enabled: enabled && !!audioId && !!runId,
+    });
+}
+
+export function useRunLogs(audioId: string, runId?: string, enabled = true) {
+    const { getAuthHeaders } = useAuth();
+    return useQuery({
+        queryKey: ["runLogs", audioId, runId],
+        queryFn: async () => {
+            const response = await fetch(`/api/v1/transcription/${audioId}/runs/${runId}/logs`, {
+                headers: getAuthHeaders(),
+            });
+            if (!response.ok) throw new Error("Failed to fetch run logs");
+            return response.json() as Promise<LogsData>;
+        },
+        enabled: enabled && !!audioId && !!runId,
     });
 }
 

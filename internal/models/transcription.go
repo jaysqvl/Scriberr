@@ -320,6 +320,8 @@ type TranscriptionJobExecution struct {
 	// Execution results
 	Status       JobStatus `json:"status" gorm:"type:varchar(20);not null"`
 	ErrorMessage *string   `json:"error_message,omitempty" gorm:"type:text"`
+	Transcript   *string   `json:"transcript,omitempty" gorm:"type:text"`
+	LogPath      *string   `json:"log_path,omitempty" gorm:"type:text"`
 
 	// Metadata
 	CreatedAt time.Time `json:"created_at" gorm:"autoCreateTime"`

@@ -58,6 +58,9 @@ type JobRepository interface {
 	UpdateTranscript(ctx context.Context, jobID string, transcript string) error
 	CreateExecution(ctx context.Context, execution *models.TranscriptionJobExecution) error
 	UpdateExecution(ctx context.Context, execution *models.TranscriptionJobExecution) error
+	ListExecutionsByJobID(ctx context.Context, jobID string) ([]models.TranscriptionJobExecution, error)
+	FindExecution(ctx context.Context, jobID, executionID string) (*models.TranscriptionJobExecution, error)
+	FindLatestExecution(ctx context.Context, jobID string) (*models.TranscriptionJobExecution, error)
 	DeleteExecutionsByJobID(ctx context.Context, jobID string) error
 	DeleteMultiTrackFilesByJobID(ctx context.Context, jobID string) error
 	UpdateStatus(ctx context.Context, jobID string, status models.JobStatus) error
@@ -152,6 +155,38 @@ func (r *jobRepository) CreateExecution(ctx context.Context, execution *models.T
 
 func (r *jobRepository) UpdateExecution(ctx context.Context, execution *models.TranscriptionJobExecution) error {
 	return r.db.WithContext(ctx).Save(execution).Error
+}
+
+func (r *jobRepository) ListExecutionsByJobID(ctx context.Context, jobID string) ([]models.TranscriptionJobExecution, error) {
+	var executions []models.TranscriptionJobExecution
+	err := r.db.WithContext(ctx).
+		Where("transcription_job_id = ?", jobID).
+		Order("started_at ASC, created_at ASC").
+		Find(&executions).Error
+	return executions, err
+}
+
+func (r *jobRepository) FindExecution(ctx context.Context, jobID, executionID string) (*models.TranscriptionJobExecution, error) {
+	var execution models.TranscriptionJobExecution
+	err := r.db.WithContext(ctx).
+		Where("transcription_job_id = ? AND id = ?", jobID, executionID).
+		First(&execution).Error
+	if err != nil {
+		return nil, err
+	}
+	return &execution, nil
+}
+
+func (r *jobRepository) FindLatestExecution(ctx context.Context, jobID string) (*models.TranscriptionJobExecution, error) {
+	var execution models.TranscriptionJobExecution
+	err := r.db.WithContext(ctx).
+		Where("transcription_job_id = ?", jobID).
+		Order("started_at DESC, created_at DESC").
+		First(&execution).Error
+	if err != nil {
+		return nil, err
+	}
+	return &execution, nil
 }
 
 func (r *jobRepository) DeleteExecutionsByJobID(ctx context.Context, jobID string) error {

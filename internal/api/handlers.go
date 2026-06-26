@@ -753,6 +753,7 @@ func (h *Handler) GetTranscriptionJob(c *gin.Context) {
 // @Failure 400 {object} map[string]string
 // @Failure 404 {object} map[string]string
 // @Router /api/v1/transcription/{id}/start [post]
+// @Router /api/v1/transcription/{id}/rerun [post]
 // @Security ApiKeyAuth
 // @Security BearerAuth
 func (h *Handler) StartTranscription(c *gin.Context) {
@@ -765,6 +766,12 @@ func (h *Handler) StartTranscription(c *gin.Context) {
 
 	requestParams, err := h.getValidatedTranscriptionParams(c, job, jobID)
 	if err != nil {
+		return
+	}
+
+	if err := h.preserveCurrentRunSnapshot(c.Request.Context(), job); err != nil {
+		logger.Error("Failed to preserve current run before rerun", "job_id", jobID, "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to preserve current run before starting transcription"})
 		return
 	}
 
@@ -1103,7 +1110,7 @@ func (h *Handler) DeleteTranscriptionJob(c *gin.Context) {
 // @Tags transcription
 // @Produce json
 // @Param id path string true "Job ID"
-// @Success 200 {object} models.TranscriptionJobExecution
+// @Success 200 {object} map[string]interface{}
 // @Failure 404 {object} map[string]string
 // @Router /api/v1/transcription/{id}/execution [get]
 // @Security ApiKeyAuth

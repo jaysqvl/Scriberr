@@ -74,6 +74,30 @@ func (m *MockJobRepository) UpdateExecution(ctx context.Context, execution *mode
 	return args.Error(0)
 }
 
+func (m *MockJobRepository) ListExecutionsByJobID(ctx context.Context, jobID string) ([]models.TranscriptionJobExecution, error) {
+	args := m.Called(ctx, jobID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]models.TranscriptionJobExecution), args.Error(1)
+}
+
+func (m *MockJobRepository) FindExecution(ctx context.Context, jobID, executionID string) (*models.TranscriptionJobExecution, error) {
+	args := m.Called(ctx, jobID, executionID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*models.TranscriptionJobExecution), args.Error(1)
+}
+
+func (m *MockJobRepository) FindLatestExecution(ctx context.Context, jobID string) (*models.TranscriptionJobExecution, error) {
+	args := m.Called(ctx, jobID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*models.TranscriptionJobExecution), args.Error(1)
+}
+
 func (m *MockJobRepository) DeleteExecutionsByJobID(ctx context.Context, jobID string) error {
 	args := m.Called(ctx, jobID)
 	return args.Error(0)

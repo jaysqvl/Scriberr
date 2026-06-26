@@ -125,6 +125,11 @@ func (u *UnifiedTranscriptionService) ProcessJob(ctx context.Context, jobID stri
 	if err := u.jobRepo.CreateExecution(ctx, execution); err != nil {
 		return fmt.Errorf("failed to create execution record: %w", err)
 	}
+	logPath := filepath.Join(u.outputDirectory, jobID, "runs", execution.ID, "transcription.log")
+	execution.LogPath = &logPath
+	if err := u.jobRepo.UpdateExecution(ctx, execution); err != nil {
+		logger.Warn("Failed to update execution log path", "job_id", jobID, "execution_id", execution.ID, "error", err)
+	}
 
 	// Broadcast initial processing status
 	if u.broadcaster != nil {
@@ -194,9 +199,13 @@ func (u *UnifiedTranscriptionService) ProcessJob(ctx context.Context, jobID stri
 			updateExecutionStatus(models.StatusFailed, errMsg)
 			return fmt.Errorf("%s", errMsg)
 		}
+		if refreshedJob, err := u.jobRepo.FindByID(ctx, jobID); err == nil {
+			execution.Transcript = refreshedJob.Transcript
+			job.Transcript = refreshedJob.Transcript
+		}
 	} else {
 		// Process single track
-		if err := u.processSingleTrackJob(ctx, job); err != nil {
+		if err := u.processSingleTrackJob(ctx, job, execution); err != nil {
 			errMsg := fmt.Sprintf("single-track processing failed: %v", err)
 			updateExecutionStatus(models.StatusFailed, errMsg)
 			return fmt.Errorf("%s", errMsg)
@@ -212,13 +221,13 @@ func (u *UnifiedTranscriptionService) ProcessJob(ctx context.Context, jobID stri
 // processSingleTrackJob handles single audio file transcription
 //
 //nolint:gocyclo // Orchestrator function with multiple steps
-func (u *UnifiedTranscriptionService) processSingleTrackJob(ctx context.Context, job *models.TranscriptionJob) error {
+func (u *UnifiedTranscriptionService) processSingleTrackJob(ctx context.Context, job *models.TranscriptionJob, execution *models.TranscriptionJobExecution) error {
 	logger.Info("Processing single-track job", "job_id", job.ID, "model_family", job.Parameters.ModelFamily)
 
 	// Create processing context
 	procCtx := interfaces.ProcessingContext{
 		JobID:           job.ID,
-		OutputDirectory: filepath.Join(u.outputDirectory, job.ID),
+		OutputDirectory: filepath.Join(u.outputDirectory, job.ID, "runs", execution.ID),
 		TempDirectory:   u.tempDirectory,
 		Metadata:        map[string]string{},
 	}
@@ -333,9 +342,12 @@ func (u *UnifiedTranscriptionService) processSingleTrackJob(ctx context.Context,
 
 	// Save results to database
 	if transcriptResult != nil {
-		if err := u.saveTranscriptionResults(job.ID, transcriptResult); err != nil {
+		resultJSON, err := u.saveTranscriptionResults(job.ID, transcriptResult)
+		if err != nil {
 			return fmt.Errorf("failed to save transcription results: %w", err)
 		}
+		execution.Transcript = &resultJSON
+		job.Transcript = &resultJSON
 	}
 
 	return nil
@@ -971,21 +983,21 @@ func (u *UnifiedTranscriptionService) findBestSpeakerForSegment(start, end float
 	return bestSpeaker
 }
 
-// saveTranscriptionResults saves the transcription results to the database
-func (u *UnifiedTranscriptionService) saveTranscriptionResults(jobID string, result *interfaces.TranscriptResult) error {
+// saveTranscriptionResults saves the transcription results to the database and returns the serialized transcript.
+func (u *UnifiedTranscriptionService) saveTranscriptionResults(jobID string, result *interfaces.TranscriptResult) (string, error) {
 	// Convert result to JSON string for database storage
 	resultJSON, err := u.convertTranscriptResultToJSON(result)
 	if err != nil {
-		return fmt.Errorf("failed to convert result to JSON: %w", err)
+		return "", fmt.Errorf("failed to convert result to JSON: %w", err)
 	}
 
 	// Update the job in the database
 	if err := u.jobRepo.UpdateTranscript(context.Background(), jobID, resultJSON); err != nil {
-		return fmt.Errorf("failed to update job transcript: %w", err)
+		return "", fmt.Errorf("failed to update job transcript: %w", err)
 	}
 
 	logger.Info("Saved transcription results", "job_id", jobID, "text_length", len(result.Text))
-	return nil
+	return resultJSON, nil
 }
 
 // convertTranscriptResultToJSON converts the interface result to JSON format
