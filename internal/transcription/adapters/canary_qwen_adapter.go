@@ -207,7 +207,7 @@ func (c *CanaryQwenAdapter) setupCanaryQwenEnvironment() error {
 	}
 
 	logger.Info("Installing Canary-Qwen dependencies")
-	cmd := exec.Command("uv", "sync", "--native-tls")
+	cmd := exec.Command("uv", "sync", "--system-certs")
 	cmd.Dir = c.envPath
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -324,7 +324,7 @@ func (c *CanaryQwenAdapter) buildCanaryQwenArgs(input interfaces.AudioInput, par
 	scriptPath := filepath.Join(c.envPath, "canary_qwen_transcribe.py")
 
 	args := []string{
-		"run", "--native-tls", "--project", c.envPath, "python", scriptPath,
+		"run", "--system-certs", "--project", c.envPath, "python", scriptPath,
 		input.FilePath,
 		"--output", outputFile,
 	}

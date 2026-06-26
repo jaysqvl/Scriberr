@@ -2,7 +2,7 @@
 name = "nvidia-canary-qwen-transcription"
 version = "0.1.0"
 description = "Audio transcription using NVIDIA Canary-Qwen"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.13"
 dependencies = [
     "nemo-toolkit[asr,tts]",
     "torch>=2.6",
@@ -10,6 +10,8 @@ dependencies = [
     "librosa",
     "soundfile",
     "numpy",
+    "ml-dtypes>=0.5.0,<0.6.0",
+    "onnx>=1.18.0,<1.20.0",
     "sacrebleu",
 ]
 
