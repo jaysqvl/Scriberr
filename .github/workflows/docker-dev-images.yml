@@ -3,6 +3,10 @@ name: Publish Docker dev images
 on:
   workflow_dispatch:
     inputs:
+      source_repository:
+        description: Source repository to build.
+        required: true
+        default: rishikanthc/Scriberr
       upstream_ref:
         description: Upstream branch, tag, or SHA to build.
         required: true
@@ -28,6 +32,9 @@ on:
         type: boolean
   schedule:
     - cron: "17 8 * * *"
+  push:
+    tags:
+      - "docker-build-*"
 
 permissions:
   contents: read
@@ -37,12 +44,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  UPSTREAM_REPOSITORY: rishikanthc/Scriberr
-  UPSTREAM_REF: ${{ github.event.inputs.upstream_ref || vars.SCRIBERR_UPSTREAM_REF || 'nightly' }}
-  IMAGE_CHANNEL: ${{ github.event.inputs.image_channel || vars.SCRIBERR_IMAGE_CHANNEL || 'nightly' }}
   IMAGE_NAMESPACE: jaysqvl
-  REQUESTED_VARIANTS: ${{ github.event.inputs.variants || 'all' }}
-  PUBLISH_LATEST: ${{ github.event.inputs.publish_latest || 'false' }}
 
 jobs:
   publish:
@@ -63,11 +65,49 @@ jobs:
             tag_suffix: "-blackwell"
 
     steps:
+      - name: Resolve build settings
+        id: settings
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_SOURCE_REPOSITORY: ${{ github.event.inputs.source_repository }}
+          INPUT_UPSTREAM_REF: ${{ github.event.inputs.upstream_ref }}
+          INPUT_IMAGE_CHANNEL: ${{ github.event.inputs.image_channel }}
+          INPUT_VARIANTS: ${{ github.event.inputs.variants }}
+          INPUT_PUBLISH_LATEST: ${{ github.event.inputs.publish_latest }}
+          VAR_SOURCE_REPOSITORY: ${{ vars.SCRIBERR_SOURCE_REPOSITORY }}
+          VAR_UPSTREAM_REF: ${{ vars.SCRIBERR_UPSTREAM_REF }}
+          VAR_IMAGE_CHANNEL: ${{ vars.SCRIBERR_IMAGE_CHANNEL }}
+          GITHUB_REPOSITORY_NAME: ${{ github.repository }}
+        run: |
+          source_repository="${INPUT_SOURCE_REPOSITORY:-${VAR_SOURCE_REPOSITORY:-rishikanthc/Scriberr}}"
+          source_ref="${INPUT_UPSTREAM_REF:-${VAR_UPSTREAM_REF:-nightly}}"
+          image_channel="${INPUT_IMAGE_CHANNEL:-${VAR_IMAGE_CHANNEL:-nightly}}"
+          variants="${INPUT_VARIANTS:-all}"
+          publish_latest="${INPUT_PUBLISH_LATEST:-false}"
+
+          if [[ "$EVENT_NAME" == "push" && "$REF_NAME" == docker-build-* ]]; then
+            image_channel="${REF_NAME#docker-build-}"
+            source_repository="$GITHUB_REPOSITORY_NAME"
+            source_ref="$image_channel"
+            variants="all"
+            publish_latest="false"
+          fi
+
+          {
+            echo "source_repository=$source_repository"
+            echo "source_ref=$source_ref"
+            echo "image_channel=$image_channel"
+            echo "variants=$variants"
+            echo "publish_latest=$publish_latest"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Check selected variant
         id: variant
         shell: bash
         run: |
-          if [[ "$REQUESTED_VARIANTS" != "all" && "$REQUESTED_VARIANTS" != "${{ matrix.variant }}" ]]; then
+          if [[ "${{ steps.settings.outputs.variants }}" != "all" && "${{ steps.settings.outputs.variants }}" != "${{ matrix.variant }}" ]]; then
             echo "enabled=false" >> "$GITHUB_OUTPUT"
           else
             echo "enabled=true" >> "$GITHUB_OUTPUT"
@@ -77,8 +117,8 @@ jobs:
         if: steps.variant.outputs.enabled == 'true'
         uses: actions/checkout@v4
         with:
-          repository: ${{ env.UPSTREAM_REPOSITORY }}
-          ref: ${{ env.UPSTREAM_REF }}
+          repository: ${{ steps.settings.outputs.source_repository }}
+          ref: ${{ steps.settings.outputs.source_ref }}
           fetch-depth: 1
 
       - name: Capture source metadata
@@ -118,6 +158,8 @@ jobs:
         shell: bash
         env:
           SHORT_SHA: ${{ steps.source.outputs.short_sha }}
+          IMAGE_CHANNEL: ${{ steps.settings.outputs.image_channel }}
+          PUBLISH_LATEST: ${{ steps.settings.outputs.publish_latest }}
         run: |
           channel="$(printf '%s' "$IMAGE_CHANNEL" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9_.-]+/-/g; s/^-+|-+$//g')"
           if [[ -z "$channel" ]]; then
@@ -152,6 +194,6 @@ jobs:
           tags: ${{ steps.tags.outputs.tags }}
           labels: |
             org.opencontainers.image.title=Scriberr
-            org.opencontainers.image.source=https://github.com/${{ env.UPSTREAM_REPOSITORY }}
+            org.opencontainers.image.source=https://github.com/${{ steps.settings.outputs.source_repository }}
             org.opencontainers.image.revision=${{ steps.source.outputs.sha }}
-            org.opencontainers.image.ref.name=${{ env.UPSTREAM_REF }}
+            org.opencontainers.image.ref.name=${{ steps.settings.outputs.source_ref }}
