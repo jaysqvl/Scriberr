@@ -218,7 +218,7 @@ Use this configuration for running Scriberr on any machine without a dedicated N
 ```yaml
 services:
   scriberr:
-    image: ghcr.io/rishikanthc/scriberr:v1.2.0
+    image: docker.io/jaysqvl/scriberr:nightly
     ports:
       - "8080:8080"
     volumes:
@@ -254,7 +254,7 @@ If you have a compatible NVIDIA GPU, this configuration enables hardware acceler
 ```yaml
 services:
   scriberr:
-    image: ghcr.io/rishikanthc/scriberr-cuda:v1.2.0
+    image: docker.io/jaysqvl/scriberr:nightly-cuda
     ports:
       - "8080:8080"
     volumes:
@@ -374,4 +374,3 @@ This project was developed using AI agents as pair programmer. It was NOT vibe c
 ## Donating
 
 <a href='https://ko-fi.com/H2H41KQZA3' target='_blank'><img height='36' style='border:0px;height:36px;' src='https://storage.ko-fi.com/cdn/kofi6.png?v=6' border='0' alt='Buy Me a Coffee at ko-fi.com' /></a>
-

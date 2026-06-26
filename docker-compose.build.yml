@@ -2,13 +2,13 @@ version: "3.9"
 
 services:
   scriberr:
-    # Build from local Dockerfile; replace with `image: ghcr.io/rishikanthc/scriberr:latest`
+    # Build from local Dockerfile; replace with `image: docker.io/jaysqvl/scriberr:nightly`
     # if you prefer pulling a prebuilt image.
     build:
       context: .
       dockerfile: Dockerfile
     image: scriberr:local
-    # image: ghcr.io/rishikanthc/scriberr:v1.0.0
+    # image: docker.io/jaysqvl/scriberr:nightly
     container_name: scriberr
     ports:
       - "8080:8080"

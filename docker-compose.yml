@@ -1,6 +1,6 @@
 services:
   scriberr:
-    image: ghcr.io/rishikanthc/scriberr:latest
+    image: docker.io/jaysqvl/scriberr:nightly
     ports:
       - "8080:8080"
     volumes:
