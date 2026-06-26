@@ -94,7 +94,7 @@ jobs:
             source_repository="$GITHUB_REPOSITORY_NAME"
             source_ref="$image_channel"
             variants="all"
-            publish_latest="false"
+            publish_latest="true"
           fi
 
           {
