@@ -3,6 +3,7 @@ import { MoreVertical, Trash2, Settings, Terminal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useAuth } from "@/features/auth/hooks/useAuth";
+import { sortProfilesByName } from "@/lib/profiles";
 import {
 	AlertDialog,
 	AlertDialogAction,
@@ -57,8 +58,8 @@ export function ProfilesTable({
 			});
 
 			if (response.ok) {
-				const data = await response.json();
-				setProfiles(data);
+				const data: TranscriptionProfile[] = await response.json();
+				setProfiles(sortProfilesByName(data));
 			} else {
 				console.error("Failed to fetch profiles");
 			}

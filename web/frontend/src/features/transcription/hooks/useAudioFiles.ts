@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient, keepPreviousData, useInfiniteQuery } from '@tanstack/react-query';
 import { useAuth } from '@/features/auth/hooks/useAuth';
+import { sortProfilesByName } from '@/lib/profiles';
 import { uploadResumable, type UploadProgressInfo } from '@/lib/resumableUpload';
 
 export interface AudioFile {
@@ -202,7 +203,8 @@ export function useTranscriptionProfiles() {
                 headers: getAuthHeaders(),
             });
             if (!response.ok) throw new Error('Failed to load profiles');
-            return response.json() as Promise<Profile[]>;
+            const profiles: Profile[] = await response.json();
+            return sortProfilesByName(profiles);
         }
     });
 }

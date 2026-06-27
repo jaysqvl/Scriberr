@@ -5,6 +5,7 @@ import { Switch } from "@/components/ui/switch";
 import { ProfilesTable } from "./ProfilesTable";
 import { TranscriptionConfigDialog, type WhisperXParams } from "@/components/TranscriptionConfigDialog";
 import { useAuth } from "@/features/auth/hooks/useAuth";
+import { sortProfilesByName } from "@/lib/profiles";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Settings } from "lucide-react";
 
@@ -48,8 +49,8 @@ export function ProfileSettings() {
 				headers: getAuthHeaders()
 			});
 			if (profilesRes.ok) {
-				const profilesData = await profilesRes.json();
-				setProfiles(profilesData);
+				const profilesData: TranscriptionProfile[] = await profilesRes.json();
+				setProfiles(sortProfilesByName(profilesData));
 			}
 
 			// Load user's default profile

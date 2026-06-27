@@ -19,6 +19,7 @@ import { Label } from "@/components/ui/label";
 import { Loader2, SlidersHorizontal } from "lucide-react";
 import type { WhisperXParams } from "./TranscriptionConfigDialog";
 import { useAuth } from "@/features/auth/hooks/useAuth";
+import { sortProfilesByName } from "@/lib/profiles";
 
 interface TranscriptionProfile {
   id: string;
@@ -70,7 +71,8 @@ export function TranscribeDDialog({
 
       if (profilesResponse.ok) {
         const profilesData: TranscriptionProfile[] = await profilesResponse.json();
-        setProfiles(profilesData);
+        const sortedProfiles = sortProfilesByName(profilesData);
+        setProfiles(sortedProfiles);
 
         // Fetch user's default profile
         const defaultResponse = await fetch("/api/v1/user/default-profile", {
@@ -86,8 +88,8 @@ export function TranscribeDDialog({
         } else if (defaultResponse.status === 404) {
           // No default profile set, use the first available profile
           setDefaultProfile(null);
-          if (profilesData.length > 0) {
-            setSelectedProfileId(profilesData[0].id);
+          if (sortedProfiles.length > 0) {
+            setSelectedProfileId(sortedProfiles[0].id);
           }
         }
       } else {

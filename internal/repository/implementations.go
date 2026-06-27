@@ -301,6 +301,30 @@ func NewProfileRepository(db *gorm.DB) ProfileRepository {
 	}
 }
 
+func (r *profileRepository) List(ctx context.Context, offset, limit int) ([]models.TranscriptionProfile, int64, error) {
+	var profiles []models.TranscriptionProfile
+	var count int64
+
+	db := r.db.WithContext(ctx).Model(&models.TranscriptionProfile{})
+
+	if err := db.Count(&count).Error; err != nil {
+		return nil, 0, err
+	}
+
+	err := db.
+		Order("LOWER(name) ASC").
+		Order("created_at ASC").
+		Order("id ASC").
+		Offset(offset).
+		Limit(limit).
+		Find(&profiles).Error
+	if err != nil {
+		return nil, 0, err
+	}
+
+	return profiles, count, nil
+}
+
 func (r *profileRepository) FindDefault(ctx context.Context) (*models.TranscriptionProfile, error) {
 	var profile models.TranscriptionProfile
 	err := r.db.WithContext(ctx).Where("is_default = ?", true).First(&profile).Error
