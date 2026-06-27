@@ -2846,7 +2846,7 @@
                         "BearerAuth": []
                     }
                 ],
-                "description": "Cancel a currently running transcription job",
+                "description": "Cancel a currently running or queued transcription job",
                 "produces": [
                     "application/json"
                 ],

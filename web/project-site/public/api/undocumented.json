@@ -144,7 +144,7 @@
       "method": "POST",
       "path": "/api/v1/transcription/{id}/kill",
       "summary": "Kill running transcription job",
-      "description": "Cancel a currently running transcription job",
+      "description": "Cancel a currently running or queued transcription job",
       "tag": "transcription"
     },
     {
