@@ -2,11 +2,11 @@
 name = "voxtral-transcription"
 version = "0.1.0"
 description = "Audio transcription using Mistral Voxtral-mini model"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.13"
 dependencies = [
     "transformers>=4.45.0",
-    "torch",
-    "torchaudio",
+    "torch>=2.6,<2.8",
+    "torchaudio>=2.6,<2.8",
     "accelerate",
     "librosa",
     "soundfile",

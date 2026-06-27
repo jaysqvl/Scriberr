@@ -1,0 +1,51 @@
+name: Python Adapter Import Checks
+
+on:
+  workflow_dispatch:
+    inputs:
+      adapter:
+        description: Adapter import check to run
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - canary-qwen
+          - nvidia-asr
+          - pyannote
+          - voxtral
+      python-version:
+        description: Python runtime version
+        required: true
+        default: '3.12'
+        type: choice
+        options:
+          - '3.12'
+          - '3.11'
+
+jobs:
+  imports:
+    name: import ${{ inputs.adapter }} on Python ${{ inputs.python-version }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python-version }}
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Run adapter import harness
+        run: |
+          if [ "${{ inputs.adapter }}" = "all" ]; then
+            python scripts/verify-python-adapter-envs.py --mode import --torch-index cpu --python "${{ inputs.python-version }}"
+          else
+            python scripts/verify-python-adapter-envs.py --mode import --torch-index cpu --python "${{ inputs.python-version }}" --adapter "${{ inputs.adapter }}"
+          fi

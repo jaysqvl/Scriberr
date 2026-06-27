@@ -8,6 +8,27 @@ The tests are located in the `tests/` subdirectory of each adapter folder (e.g.,
 
 To run the tests, you need `uv` installed and the `parakeet` environment set up (which serves as a shared environment for these tests).
 
+## Dependency Harness
+
+The adapter `pyproject.toml` files are runtime compatibility surfaces. Run the resolver guard before changing Python, NeMo, Torch, ONNX, or `ml-dtypes` versions:
+
+```bash
+python3 scripts/verify-python-adapter-envs.py --mode lock --python 3.12
+```
+
+The lock mode checks each adapter pyproject against the runtime Python range, verifies fragile package bands, and imports the resolved ONNX/`ml-dtypes` pair for the NVIDIA environments. Canary-Qwen specifically asserts that `ml_dtypes.float4_e2m1fn` exists so the known ONNX import crash cannot drift back in unnoticed.
+
+Full adapter import checks are available when you want to materialize the Python envs without downloading model weights:
+
+```bash
+python3 scripts/verify-python-adapter-envs.py --mode import --torch-index cpu --adapter canary-qwen --python 3.12
+python3 scripts/verify-python-adapter-envs.py --mode import --torch-index cpu --adapter nvidia-asr --python 3.12
+python3 scripts/verify-python-adapter-envs.py --mode import --torch-index cpu --adapter pyannote --python 3.12
+python3 scripts/verify-python-adapter-envs.py --mode import --torch-index cpu --adapter voxtral --python 3.12
+```
+
+Import mode can be slow because it installs NeMo, Torch, and the adapter stack, but it does not require a GPU. Use `--torch-index project` when you specifically want to materialize the CUDA wheel selection used by the Docker runtime.
+
 ### Prerequisites
 
 1.  Ensure you have `uv` installed.
