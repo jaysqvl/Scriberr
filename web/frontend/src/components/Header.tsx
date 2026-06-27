@@ -4,6 +4,7 @@ import {
 	DropdownMenu,
 	DropdownMenuContent,
 	DropdownMenuItem,
+	DropdownMenuSeparator,
 	DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Upload, Mic, Settings, LogOut, Home, Plus, Grip, Zap, Youtube, Video, Users, MonitorSpeaker } from "lucide-react";
@@ -17,6 +18,7 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/features/auth/hooks/useAuth";
 import { isVideoFile, isAudioFile } from "../utils/fileProcessor";
 import { useGlobalUpload } from "@/contexts/GlobalUploadContext";
+import { unknownAppInfo, useAppInfo } from "@/hooks/useAppInfo";
 
 interface FileWithType {
 	file: File;
@@ -38,6 +40,7 @@ export function Header({ onFileSelect, onMultiTrackClick, onDownloadComplete }: 
 	const [isSystemRecorderOpen, setIsSystemRecorderOpen] = useState(false);
 	const [isQuickTranscriptionOpen, setIsQuickTranscriptionOpen] = useState(false);
 	const [isYouTubeDialogOpen, setIsYouTubeDialogOpen] = useState(false);
+	const { data: appInfo = unknownAppInfo } = useAppInfo();
 
 	// Use global upload context as fallback when props are not provided
 	const globalUpload = useGlobalUpload();
@@ -272,7 +275,7 @@ export function Header({ onFileSelect, onMultiTrackClick, onDownloadComplete }: 
 								<span className="sr-only">Open menu</span>
 							</Button>
 						</DropdownMenuTrigger>
-						<DropdownMenuContent align="end" className="w-48 glass-card border-[var(--border-subtle)] p-2 rounded-[var(--radius-card)] shadow-[var(--shadow-float)]">
+						<DropdownMenuContent align="end" className="w-60 glass-card border-[var(--border-subtle)] p-2 rounded-[var(--radius-card)] shadow-[var(--shadow-float)]">
 							<DropdownMenuItem onClick={handleHomeClick} className="cursor-pointer rounded-[var(--radius-btn)] focus:bg-[var(--secondary)] py-2.5">
 								<Home className="h-4 w-4 mr-2" />
 								Home
@@ -285,6 +288,25 @@ export function Header({ onFileSelect, onMultiTrackClick, onDownloadComplete }: 
 								<LogOut className="h-4 w-4 mr-2" />
 								Logout
 							</DropdownMenuItem>
+							<DropdownMenuSeparator className="bg-[var(--border-subtle)]" />
+							<div className="px-2.5 py-2 text-xs text-[var(--text-tertiary)] select-text" aria-label="Running build">
+								<div className="mb-1 text-[11px] font-medium uppercase text-[var(--text-tertiary)]">
+									Build
+								</div>
+								<div className="font-medium text-[var(--text-secondary)]">
+									Scriberr {appInfo.version}
+								</div>
+								{appInfo.commit && (
+									<div className="mt-0.5 font-mono text-[11px] text-[var(--text-tertiary)]">
+										{appInfo.commit}
+									</div>
+								)}
+								{appInfo.built && (
+									<div className="mt-0.5 text-[11px] text-[var(--text-tertiary)]">
+										built {appInfo.built}
+									</div>
+								)}
+							</div>
 						</DropdownMenuContent>
 					</DropdownMenu>
 

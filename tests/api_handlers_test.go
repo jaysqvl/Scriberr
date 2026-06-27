@@ -186,6 +186,9 @@ func (suite *APIHandlerTestSuite) TestHealthCheck() {
 	err := json.Unmarshal(w.Body.Bytes(), &response)
 	assert.NoError(suite.T(), err)
 	assert.Equal(suite.T(), "healthy", response["status"])
+	assert.Contains(suite.T(), response, "version")
+	assert.Contains(suite.T(), response, "commit")
+	assert.Contains(suite.T(), response, "built")
 }
 
 // Test user registration

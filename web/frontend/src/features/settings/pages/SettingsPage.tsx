@@ -18,6 +18,7 @@ import { SummaryTemplateDialog, type SummaryTemplate } from "../components/Summa
 import { SummaryTemplatesTable } from "../components/SummaryTemplatesTable";
 import { CLISettingsTab } from "../components/CLISettingsTab";
 import { useAuth } from "@/features/auth/hooks/useAuth";
+import { unknownAppInfo, useAppInfo } from "@/hooks/useAppInfo";
 
 export function Settings() {
   const [activeTab, setActiveTab] = useState("transcription");
@@ -27,7 +28,7 @@ export function Settings() {
   const [editingSummary, setEditingSummary] = useState<SummaryTemplate | null>(null);
   const [summaryRefresh, setSummaryRefresh] = useState(0);
   const [llmConfigured, setLlmConfigured] = useState(false);
-  const [appInfo, setAppInfo] = useState<{ version?: string; commit?: string; built?: string } | null>(null);
+  const { data: appInfo = unknownAppInfo } = useAppInfo();
 
   // Fetch LLM config and models
   useEffect(() => {
@@ -47,19 +48,6 @@ export function Settings() {
     };
     fetchLLM();
   }, [activeTab, getAuthHeaders]);
-
-  useEffect(() => {
-    const fetchAppInfo = async () => {
-      try {
-        const response = await fetch('/health');
-        if (!response.ok) return;
-        setAppInfo(await response.json());
-      } catch {
-        setAppInfo(null);
-      }
-    };
-    fetchAppInfo();
-  }, []);
 
   return (
     <MainLayout
@@ -211,12 +199,12 @@ export function Settings() {
         </Tabs>
 
         <div className="mt-6 border-t border-[var(--border-subtle)] pt-4 text-xs text-[var(--text-tertiary)]">
-          Scriberr {appInfo?.version || "unknown"}
-          {appInfo?.commit && appInfo.commit !== "none" && (
-            <span> · {appInfo.commit.slice(0, 12)}</span>
+          Scriberr {appInfo.version}
+          {appInfo.commit && (
+            <span> · {appInfo.commit}</span>
           )}
-          {appInfo?.built && appInfo.built !== "unknown" && (
-            <span> · built {new Date(appInfo.built).toLocaleString()}</span>
+          {appInfo.built && (
+            <span> · built {appInfo.built}</span>
           )}
         </div>
       </div>
