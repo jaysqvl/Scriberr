@@ -1,4 +1,4 @@
-import { Activity, AlertCircle, Download, FileText, GitCompareArrows, Info, MoreVertical, RefreshCw, ScrollText, Settings2 } from "lucide-react";
+import { Activity, AlertCircle, Download, FileText, GitCompareArrows, Info, Loader2, MoreVertical, RefreshCw, ScrollText, Settings2, StopCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
     DropdownMenu,
@@ -36,6 +36,10 @@ interface RunWorkspaceProps {
     onCompareRunChange: (runId: string) => void;
     onModeChange: (mode: RunWorkspaceMode) => void;
     onRunAgain: () => void;
+    onStopRun?: () => void;
+    runAgainDisabled?: boolean;
+    canStopRun?: boolean;
+    stoppingRun?: boolean;
     onOpenRunDetails: (runId?: string) => void;
     onOpenRunLogs: (runId?: string) => void;
     onDownloadRun: (run: ExecutionRun, format: DownloadFormat, transcript?: Transcript | null) => void;
@@ -55,6 +59,10 @@ export function RunWorkspace({
     onCompareRunChange,
     onModeChange,
     onRunAgain,
+    onStopRun,
+    runAgainDisabled = false,
+    canStopRun = false,
+    stoppingRun = false,
     onOpenRunDetails,
     onOpenRunLogs,
     onDownloadRun,
@@ -75,10 +83,13 @@ export function RunWorkspace({
                             No run history exists for this file yet.
                         </p>
                     </div>
-                    <Button onClick={onRunAgain} size="sm" className="gap-2 rounded-full">
-                        <RefreshCw className="h-4 w-4" />
-                        Run Again
-                    </Button>
+                    <RunControl
+                        onRunAgain={onRunAgain}
+                        onStopRun={onStopRun}
+                        runAgainDisabled={runAgainDisabled}
+                        canStopRun={canStopRun}
+                        stoppingRun={stoppingRun}
+                    />
                 </div>
             </section>
         );
@@ -121,15 +132,13 @@ export function RunWorkspace({
                                 </TabsTrigger>
                             </TabsList>
                         </Tabs>
-                        <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={onRunAgain}
-                            className="gap-2 rounded-full border-[var(--border-subtle)] bg-[var(--bg-card)]"
-                        >
-                            <RefreshCw className="h-4 w-4" />
-                            Run Again
-                        </Button>
+                        <RunControl
+                            onRunAgain={onRunAgain}
+                            onStopRun={onStopRun}
+                            runAgainDisabled={runAgainDisabled}
+                            canStopRun={canStopRun}
+                            stoppingRun={stoppingRun}
+                        />
                     </div>
                 </div>
 
@@ -175,6 +184,52 @@ export function RunWorkspace({
                 )}
             </div>
         </section>
+    );
+}
+
+function RunControl({
+    onRunAgain,
+    onStopRun,
+    runAgainDisabled,
+    canStopRun,
+    stoppingRun,
+}: {
+    onRunAgain: () => void;
+    onStopRun?: () => void;
+    runAgainDisabled: boolean;
+    canStopRun: boolean;
+    stoppingRun: boolean;
+}) {
+    if (canStopRun && onStopRun) {
+        return (
+            <Button
+                variant="outline"
+                size="sm"
+                onClick={onStopRun}
+                disabled={stoppingRun}
+                className="gap-2 rounded-full border-red-500/30 bg-red-500/10 text-red-600 hover:bg-red-500/15 hover:text-red-700 dark:text-red-300 dark:hover:text-red-200"
+            >
+                {stoppingRun ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                    <StopCircle className="h-4 w-4" />
+                )}
+                Stop Run
+            </Button>
+        );
+    }
+
+    return (
+        <Button
+            variant="outline"
+            size="sm"
+            onClick={onRunAgain}
+            disabled={runAgainDisabled}
+            className="gap-2 rounded-full border-[var(--border-subtle)] bg-[var(--bg-card)]"
+        >
+            <RefreshCw className="h-4 w-4" />
+            Run Again
+        </Button>
     );
 }
 

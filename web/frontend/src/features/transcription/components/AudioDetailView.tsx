@@ -2,12 +2,22 @@ import { useRef, useState, useEffect, useCallback, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
-import { MoreVertical, Edit2, Activity, Bot, Check, Loader2, List, AlignLeft, ArrowDownCircle, StickyNote, MessageCircle, Clock, AlertCircle, Users, RefreshCw } from "lucide-react";
+import { MoreVertical, Edit2, Activity, Bot, Check, Loader2, List, AlignLeft, ArrowDownCircle, StickyNote, MessageCircle, Clock, AlertCircle, Users } from "lucide-react";
 import { Header } from "@/components/Header";
 
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
+import {
+    AlertDialog,
+    AlertDialogAction,
+    AlertDialogCancel,
+    AlertDialogContent,
+    AlertDialogDescription,
+    AlertDialogFooter,
+    AlertDialogHeader,
+    AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Input } from "@/components/ui/input";
 import { EmberPlayer, type EmberPlayerRef } from "@/components/audio/EmberPlayer";
 import { cn } from "@/lib/utils";
@@ -70,6 +80,8 @@ export const AudioDetailView = function AudioDetailView({ audioId: propAudioId }
     const [rerunProfileDialogOpen, setRerunProfileDialogOpen] = useState(false);
     const [rerunAdvancedDialogOpen, setRerunAdvancedDialogOpen] = useState(false);
     const [rerunLoading, setRerunLoading] = useState(false);
+    const [stopRunDialogOpen, setStopRunDialogOpen] = useState(false);
+    const [stopRunLoading, setStopRunLoading] = useState(false);
     const [selectedRunId, setSelectedRunId] = useState<string | undefined>();
     const [compareRunId, setCompareRunId] = useState<string | undefined>();
     const [runViewMode, setRunViewMode] = useState<"transcript" | "compare">("transcript");
@@ -222,6 +234,46 @@ export const AudioDetailView = function AudioDetailView({ audioId: propAudioId }
         }
     }, [audioId, audioFile, getAuthHeaders, queryClient]);
 
+    const handleStopRun = useCallback(async () => {
+        if (!audioId) return;
+
+        try {
+            setStopRunLoading(true);
+            const response = await fetch(`/api/v1/transcription/${audioId}/kill`, {
+                method: "POST",
+                headers: {
+                    ...getAuthHeaders(),
+                },
+            });
+
+            if (!response.ok) {
+                let message = "Failed to stop run";
+                const text = await response.text();
+                try {
+                    const data = JSON.parse(text);
+                    message = data.error || message;
+                } catch {
+                    message = text || message;
+                }
+                throw new Error(message);
+            }
+
+            setStopRunDialogOpen(false);
+            await Promise.all([
+                queryClient.invalidateQueries({ queryKey: ["audio", audioId] }),
+                queryClient.invalidateQueries({ queryKey: ["transcript", audioId] }),
+                queryClient.invalidateQueries({ queryKey: ["executionRuns", audioId] }),
+                queryClient.invalidateQueries({ queryKey: ["executionData", audioId] }),
+                queryClient.invalidateQueries({ queryKey: ["logs", audioId] }),
+                queryClient.invalidateQueries({ queryKey: ["audioFiles"] }),
+            ]);
+        } catch (err) {
+            alert(err instanceof Error ? err.message : "Error stopping run");
+        } finally {
+            setStopRunLoading(false);
+        }
+    }, [audioId, getAuthHeaders, queryClient]);
+
     const getRunFilenameSuffix = useCallback((run?: ExecutionRun) => {
         if (!run) return undefined;
         const family = run.actual_parameters?.model_family || "run";
@@ -305,6 +357,7 @@ export const AudioDetailView = function AudioDetailView({ audioId: propAudioId }
         year: "numeric"
     }).toUpperCase();
     const runCount = runsData?.runs.length || 0;
+    const canStopRun = audioFile.status === "processing" || audioFile.status === "pending";
 
     return (
         <div className="h-screen flex flex-col bg-[var(--bg-main)] relative selection:bg-[var(--brand-light)] overflow-hidden">
@@ -430,17 +483,6 @@ export const AudioDetailView = function AudioDetailView({ audioId: propAudioId }
                                                     </span>
                                                 )}
                                             </Button>
-                                            <Button
-                                                variant="outline"
-                                                size="sm"
-                                                onClick={() => setRerunProfileDialogOpen(true)}
-                                                disabled={audioFile.status === "processing" || audioFile.status === "pending"}
-                                                className="rounded-full border-[var(--border-subtle)] shadow-sm bg-[var(--bg-card)] hover:bg-[var(--bg-main)] transition-all gap-2 px-3"
-                                            >
-                                                <RefreshCw className="h-4 w-4" />
-                                                <span className="hidden sm:inline">Run Again</span>
-                                            </Button>
-
                                             <DropdownMenu>
                                                 <DropdownMenuTrigger asChild>
                                                     <Button
@@ -488,13 +530,6 @@ export const AudioDetailView = function AudioDetailView({ audioId: propAudioId }
                                                         <Bot className="mr-2 h-4 w-4" /> AI Summary
                                                     </DropdownMenuItem>
                                                     <DropdownMenuSeparator className="bg-[var(--border-subtle)] my-1" />
-                                                    <DropdownMenuItem
-                                                        onClick={() => setRerunProfileDialogOpen(true)}
-                                                        disabled={audioFile.status === "processing" || audioFile.status === "pending"}
-                                                        className="rounded-[8px] cursor-pointer"
-                                                    >
-                                                        <RefreshCw className="mr-2 h-4 w-4 opacity-70" /> Run Again
-                                                    </DropdownMenuItem>
                                                     <DropdownMenuItem onClick={() => handleOpenRunDetails(selectedRunId)} className="rounded-[8px] cursor-pointer">
                                                         <Activity className="mr-2 h-4 w-4 opacity-70" /> Run Details
                                                     </DropdownMenuItem>
@@ -529,6 +564,10 @@ export const AudioDetailView = function AudioDetailView({ audioId: propAudioId }
                                     onCompareRunChange={setCompareRunId}
                                     onModeChange={setRunViewMode}
                                     onRunAgain={() => setRerunProfileDialogOpen(true)}
+                                    onStopRun={() => setStopRunDialogOpen(true)}
+                                    runAgainDisabled={rerunLoading || canStopRun}
+                                    canStopRun={canStopRun}
+                                    stoppingRun={stopRunLoading}
                                     onOpenRunDetails={handleOpenRunDetails}
                                     onOpenRunLogs={handleOpenRunLogs}
                                     onDownloadRun={handleRunDownload}
@@ -642,6 +681,44 @@ export const AudioDetailView = function AudioDetailView({ audioId: propAudioId }
                 isMultiTrack={audioFile.is_multi_track}
                 title="Run Again Advanced"
             />
+            <AlertDialog open={stopRunDialogOpen} onOpenChange={setStopRunDialogOpen}>
+                <AlertDialogContent className="glass-card bg-[var(--bg-main)]/90 border-[var(--border-subtle)]">
+                    <AlertDialogHeader>
+                        <AlertDialogTitle className="text-[var(--text-primary)]">
+                            Stop Run?
+                        </AlertDialogTitle>
+                        <AlertDialogDescription className="text-[var(--text-secondary)]">
+                            Stop the active transcription run for "{audioFile.title || audioFile.audio_path.split("/").pop() || "this audio"}"?
+                            Partially transcribed data may be saved.
+                        </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                        <AlertDialogCancel
+                            disabled={stopRunLoading}
+                            className="bg-[var(--secondary)] border-[var(--border-subtle)] text-[var(--text-secondary)] hover:bg-[var(--bg-card)]"
+                        >
+                            Cancel
+                        </AlertDialogCancel>
+                        <AlertDialogAction
+                            disabled={stopRunLoading}
+                            className="bg-[var(--warning)] text-white hover:opacity-90"
+                            onClick={(event) => {
+                                event.preventDefault();
+                                void handleStopRun();
+                            }}
+                        >
+                            {stopRunLoading ? (
+                                <>
+                                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                    Stopping...
+                                </>
+                            ) : (
+                                "Stop Run"
+                            )}
+                        </AlertDialogAction>
+                    </AlertDialogFooter>
+                </AlertDialogContent>
+            </AlertDialog>
 
             {/* Mobile / Overlay Chat */}
             {chatOpen && isMobile && createPortal(

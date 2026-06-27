@@ -198,6 +198,32 @@ func (suite *QueueTestSuite) TestJobCancellation() {
 	}, 2*time.Second, 100*time.Millisecond, "Job status should update to failed")
 }
 
+// Test cancelling a queued job before a worker starts processing it.
+func (suite *QueueTestSuite) TestPendingJobCancellation() {
+	mockProcessor := &MockJobProcessor{}
+	job := suite.helper.CreateTestTranscriptionJob(suite.T(), "Test Pending Job Cancellation")
+
+	tq := queue.NewTaskQueue(1, mockProcessor, suite.jobRepo)
+
+	err := tq.EnqueueJob(job.ID)
+	assert.NoError(suite.T(), err)
+
+	err = tq.KillJob(job.ID)
+	assert.NoError(suite.T(), err)
+
+	updatedJob, err := tq.GetJobStatus(job.ID)
+	assert.NoError(suite.T(), err)
+	assert.Equal(suite.T(), models.StatusFailed, updatedJob.Status)
+	assert.NotNil(suite.T(), updatedJob.ErrorMessage)
+	assert.Contains(suite.T(), *updatedJob.ErrorMessage, "cancelled by user before processing")
+
+	tq.Start()
+	defer tq.Stop()
+
+	time.Sleep(100 * time.Millisecond)
+	assert.Len(suite.T(), mockProcessor.Calls, 0, "cancelled pending jobs should not be processed later")
+}
+
 // Test killing non-running job
 func (suite *QueueTestSuite) TestKillNonRunningJob() {
 	mockProcessor := &MockJobProcessor{}

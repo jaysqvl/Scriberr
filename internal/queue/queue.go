@@ -187,6 +187,16 @@ func (tq *TaskQueue) worker(id int) {
 
 			logger.WorkerOperation(id, jobID, "start")
 
+			job, err := tq.jobRepo.FindByID(context.Background(), jobID)
+			if err != nil {
+				logger.Error("Failed to load queued job", "worker_id", id, "job_id", jobID, "error", err)
+				continue
+			}
+			if job.Status != models.StatusPending {
+				logger.Info("Skipping queued job with non-pending status", "worker_id", id, "job_id", jobID, "status", job.Status)
+				continue
+			}
+
 			// Update job status to processing
 			if err := tq.updateJobStatus(jobID, models.StatusProcessing); err != nil {
 				logger.Error("Failed to update job status", "worker_id", id, "job_id", jobID, "error", err)
@@ -214,7 +224,7 @@ func (tq *TaskQueue) worker(id int) {
 			}
 
 			// Process the job with process registration
-			err := tq.processor.ProcessJobWithProcess(jobCtx, jobID, registerProcess)
+			err = tq.processor.ProcessJobWithProcess(jobCtx, jobID, registerProcess)
 
 			// Remove job from running jobs
 			tq.jobsMutex.Lock()
@@ -254,7 +264,7 @@ func (tq *TaskQueue) worker(id int) {
 	}
 }
 
-// KillJob aggressively terminates a running job
+// KillJob aggressively terminates a running job or cancels a queued pending job
 func (tq *TaskQueue) KillJob(jobID string) error {
 	tq.jobsMutex.Lock()
 	defer tq.jobsMutex.Unlock()
@@ -277,6 +287,17 @@ func (tq *TaskQueue) KillJob(jobID string) error {
 			}
 			if err := tq.updateJobError(jobID, "Job was forcefully terminated by user (zombie process)"); err != nil {
 				logger.Error("Failed to update zombie job error", "job_id", jobID, "error", err)
+			}
+			return nil
+		}
+
+		if job.Status == models.StatusPending {
+			logger.Info("Cancelling queued pending job", "job_id", jobID)
+			if err := tq.updateJobStatus(jobID, models.StatusFailed); err != nil {
+				logger.Error("Failed to update pending job status", "job_id", jobID, "error", err)
+			}
+			if err := tq.updateJobError(jobID, "Job was cancelled by user before processing"); err != nil {
+				logger.Error("Failed to update pending job error", "job_id", jobID, "error", err)
 			}
 			return nil
 		}
