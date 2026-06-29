@@ -59,6 +59,15 @@ jobs:
       - name: Install frontend dependencies
         run: cd web/frontend && npm ci
 
+      - name: Build frontend
+        run: cd web/frontend && npm run build
+
+      - name: Copy frontend assets
+        run: |
+          mkdir -p internal/web
+          rm -rf internal/web/dist
+          cp -r web/frontend/dist internal/web/
+
       - name: Run backend tests
         run: go test ./internal/... ./tests
 
