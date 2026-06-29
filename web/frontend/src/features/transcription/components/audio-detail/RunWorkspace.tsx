@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { Activity, AlertCircle, Download, FileText, GitCompareArrows, Info, Loader2, MoreVertical, RefreshCw, ScrollText, Settings2, StopCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -21,6 +22,15 @@ import type { ExecutionRun, Transcript } from "@/features/transcription/hooks/us
 
 type RunWorkspaceMode = "transcript" | "compare";
 type DownloadFormat = "srt" | "txt" | "json";
+type DiffSide = "primary" | "compare";
+
+interface TranscriptDiff {
+    primaryChanged: Set<number>;
+    compareChanged: Set<number>;
+    primaryTotal: number;
+    compareTotal: number;
+    unchanged: number;
+}
 
 interface RunWorkspaceProps {
     runs: ExecutionRun[];
@@ -69,6 +79,10 @@ export function RunWorkspace({
 }: RunWorkspaceProps) {
     const selectedRun = runs.find((run) => run.id === selectedRunId) || runs[0];
     const compareRun = runs.find((run) => run.id === compareRunId) || runs.find((run) => run.id !== selectedRun?.id);
+    const transcriptDiff = useMemo(
+        () => buildTranscriptDiff(selectedTranscript, compareTranscript),
+        [compareTranscript, selectedTranscript]
+    );
 
     if (runs.length === 0) {
         return (
@@ -143,34 +157,44 @@ export function RunWorkspace({
                 </div>
 
                 {mode === "compare" && compareRun ? (
-                    <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-                        <ComparePanel
-                            title="Primary"
-                            runs={runs}
-                            activeRunId={activeRunId}
-                            run={selectedRun}
-                            transcript={selectedTranscript}
-                            loading={selectedTranscriptLoading}
-                            selectedRunId={selectedRun?.id}
-                            onRunChange={onSelectedRunChange}
-                            onOpenRunDetails={onOpenRunDetails}
-                            onOpenRunLogs={onOpenRunLogs}
-                            onDownloadRun={onDownloadRun}
+                    <>
+                        <DiffSummary
+                            diff={transcriptDiff}
+                            loading={selectedTranscriptLoading || compareTranscriptLoading}
                         />
-                        <ComparePanel
-                            title="Compare"
-                            runs={runs.filter((run) => run.id !== selectedRun?.id)}
-                            activeRunId={activeRunId}
-                            run={compareRun}
-                            transcript={compareTranscript}
-                            loading={compareTranscriptLoading}
-                            selectedRunId={compareRun.id}
-                            onRunChange={onCompareRunChange}
-                            onOpenRunDetails={onOpenRunDetails}
-                            onOpenRunLogs={onOpenRunLogs}
-                            onDownloadRun={onDownloadRun}
-                        />
-                    </div>
+                        <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+                            <ComparePanel
+                                title="Primary"
+                                runs={runs}
+                                activeRunId={activeRunId}
+                                run={selectedRun}
+                                transcript={selectedTranscript}
+                                loading={selectedTranscriptLoading}
+                                selectedRunId={selectedRun?.id}
+                                diff={transcriptDiff}
+                                diffSide="primary"
+                                onRunChange={onSelectedRunChange}
+                                onOpenRunDetails={onOpenRunDetails}
+                                onOpenRunLogs={onOpenRunLogs}
+                                onDownloadRun={onDownloadRun}
+                            />
+                            <ComparePanel
+                                title="Compare"
+                                runs={runs.filter((run) => run.id !== selectedRun?.id)}
+                                activeRunId={activeRunId}
+                                run={compareRun}
+                                transcript={compareTranscript}
+                                loading={compareTranscriptLoading}
+                                selectedRunId={compareRun.id}
+                                diff={transcriptDiff}
+                                diffSide="compare"
+                                onRunChange={onCompareRunChange}
+                                onOpenRunDetails={onOpenRunDetails}
+                                onOpenRunLogs={onOpenRunLogs}
+                                onDownloadRun={onDownloadRun}
+                            />
+                        </div>
+                    </>
                 ) : (
                     <SelectedRunPanel
                         run={selectedRun}
@@ -318,6 +342,8 @@ function ComparePanel({
     transcript,
     loading,
     selectedRunId,
+    diff,
+    diffSide,
     onRunChange,
     onOpenRunDetails,
     onOpenRunLogs,
@@ -330,6 +356,8 @@ function ComparePanel({
     transcript?: Transcript | null;
     loading: boolean;
     selectedRunId?: string;
+    diff: TranscriptDiff;
+    diffSide: DiffSide;
     onRunChange: (runId: string) => void;
     onOpenRunDetails: (runId?: string) => void;
     onOpenRunLogs: (runId?: string) => void;
@@ -373,21 +401,95 @@ function ComparePanel({
                     compact
                 />
             </div>
-            <TranscriptPreview transcript={transcript} loading={loading} />
+            <TranscriptPreview transcript={transcript} loading={loading} diff={diff} side={diffSide} />
         </div>
     );
 }
 
-function TranscriptPreview({ transcript, loading }: { transcript?: Transcript | null; loading: boolean }) {
+function DiffSummary({ diff, loading }: { diff: TranscriptDiff; loading: boolean }) {
+    const primaryChanged = diff.primaryChanged.size;
+    const compareChanged = diff.compareChanged.size;
+    const total = Math.max(diff.primaryTotal, diff.compareTotal);
+    const changedPercent = total > 0 ? Math.round(((primaryChanged + compareChanged) / Math.max(1, diff.primaryTotal + diff.compareTotal)) * 100) : 0;
+
+    return (
+        <div className="rounded-[var(--radius-card)] border border-[var(--border-subtle)] bg-[var(--bg-main)]/50 p-3">
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+                <span className="font-semibold uppercase tracking-wide text-[var(--text-tertiary)]">Diff</span>
+                {loading ? (
+                    <span className="text-[var(--text-secondary)]">Loading transcripts...</span>
+                ) : total === 0 ? (
+                    <span className="text-[var(--text-secondary)]">No transcript text available.</span>
+                ) : (
+                    <>
+                        <DiffMetric label="Primary changes" value={primaryChanged} tone="removed" />
+                        <DiffMetric label="Compare changes" value={compareChanged} tone="added" />
+                        <DiffMetric label="Unchanged" value={diff.unchanged} />
+                        <span className="rounded-full bg-[var(--bg-card)] px-2 py-1 font-mono text-[var(--text-secondary)]">
+                            {changedPercent}% changed
+                        </span>
+                    </>
+                )}
+            </div>
+        </div>
+    );
+}
+
+function DiffMetric({ label, value, tone = "neutral" }: { label: string; value: number; tone?: "added" | "removed" | "neutral" }) {
+    return (
+        <span
+            className={cn(
+                "rounded-full px-2 py-1 font-mono",
+                tone === "added" && "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300",
+                tone === "removed" && "bg-red-500/10 text-red-700 dark:text-red-300",
+                tone === "neutral" && "bg-[var(--bg-card)] text-[var(--text-secondary)]"
+            )}
+            title={label}
+        >
+            {label}: {value}
+        </span>
+    );
+}
+
+function TranscriptPreview({ transcript, loading, diff, side }: { transcript?: Transcript | null; loading: boolean; diff: TranscriptDiff; side: DiffSide }) {
     if (loading) {
         return <div className="rounded-[var(--radius-card)] bg-[var(--bg-card)] p-4 text-sm text-[var(--text-secondary)]">Loading transcript...</div>;
     }
     if (!transcript) {
         return <div className="rounded-[var(--radius-card)] bg-[var(--bg-card)] p-4 text-sm text-[var(--text-tertiary)]">No transcript captured for this run.</div>;
     }
+    const changedWords = side === "primary" ? diff.primaryChanged : diff.compareChanged;
+    const tokenCursor = { current: 0 };
+
+    if (transcript.segments?.length) {
+        return (
+            <div className="max-h-[520px] overflow-y-auto rounded-[var(--radius-card)] bg-[var(--bg-card)] p-2">
+                <div className="space-y-1">
+                    {transcript.segments.map((segment, index) => (
+                        <div key={`${segment.start}-${index}`} className="grid grid-cols-[64px_minmax(0,1fr)] gap-2 rounded-md px-2 py-1.5 hover:bg-[var(--bg-main)]/70 sm:grid-cols-[86px_minmax(0,1fr)]">
+                            <div className="min-w-0 select-none text-right">
+                                <div className="font-mono text-[10px] leading-5 text-[var(--text-tertiary)]">
+                                    {formatTimestamp(segment.start)}
+                                </div>
+                                {segment.speaker && (
+                                    <div className="truncate text-[10px] font-semibold uppercase tracking-wide text-[var(--brand-solid)]" title={segment.speaker}>
+                                        {segment.speaker}
+                                    </div>
+                                )}
+                            </div>
+                            <div className="min-w-0 text-sm leading-6 text-[var(--text-primary)]">
+                                {renderDiffTokens(segment.text, tokenCursor, changedWords, side)}
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            </div>
+        );
+    }
+
     return (
         <div className="max-h-[520px] overflow-y-auto rounded-[var(--radius-card)] bg-[var(--bg-card)] p-4 text-sm leading-7 text-[var(--text-primary)] whitespace-pre-wrap">
-            {transcript.text || "Transcript is empty."}
+            {transcript.text ? renderDiffTokens(transcript.text, tokenCursor, changedWords, side) : "Transcript is empty."}
         </div>
     );
 }
@@ -517,6 +619,154 @@ function StatusPill({ status }: { status: string }) {
             {status}
         </span>
     );
+}
+
+function buildTranscriptDiff(primary?: Transcript | null, compare?: Transcript | null): TranscriptDiff {
+    const primaryTokens = tokenizeForDiff(getDiffText(primary));
+    const compareTokens = tokenizeForDiff(getDiffText(compare));
+    const primaryChanged = new Set<number>();
+    const compareChanged = new Set<number>();
+    let unchanged = 0;
+    let primaryIndex = 0;
+    let compareIndex = 0;
+    const lookahead = 16;
+
+    while (primaryIndex < primaryTokens.length && compareIndex < compareTokens.length) {
+        if (primaryTokens[primaryIndex].normalized === compareTokens[compareIndex].normalized) {
+            unchanged += 1;
+            primaryIndex += 1;
+            compareIndex += 1;
+            continue;
+        }
+
+        const nextMatch = findNearbyTokenMatch(primaryTokens, compareTokens, primaryIndex, compareIndex, lookahead);
+        if (nextMatch) {
+            for (let i = primaryIndex; i < primaryIndex + nextMatch.primaryOffset; i += 1) {
+                primaryChanged.add(i);
+            }
+            for (let i = compareIndex; i < compareIndex + nextMatch.compareOffset; i += 1) {
+                compareChanged.add(i);
+            }
+            primaryIndex += nextMatch.primaryOffset;
+            compareIndex += nextMatch.compareOffset;
+            continue;
+        }
+
+        primaryChanged.add(primaryIndex);
+        compareChanged.add(compareIndex);
+        primaryIndex += 1;
+        compareIndex += 1;
+    }
+
+    for (let i = primaryIndex; i < primaryTokens.length; i += 1) {
+        primaryChanged.add(i);
+    }
+    for (let i = compareIndex; i < compareTokens.length; i += 1) {
+        compareChanged.add(i);
+    }
+
+    return {
+        primaryChanged,
+        compareChanged,
+        primaryTotal: primaryTokens.length,
+        compareTotal: compareTokens.length,
+        unchanged,
+    };
+}
+
+function findNearbyTokenMatch(
+    primaryTokens: DiffToken[],
+    compareTokens: DiffToken[],
+    primaryIndex: number,
+    compareIndex: number,
+    lookahead: number,
+) {
+    let best: { primaryOffset: number; compareOffset: number; cost: number } | null = null;
+    const primaryMax = Math.min(primaryTokens.length - primaryIndex - 1, lookahead);
+    const compareMax = Math.min(compareTokens.length - compareIndex - 1, lookahead);
+
+    for (let primaryOffset = 0; primaryOffset <= primaryMax; primaryOffset += 1) {
+        for (let compareOffset = 0; compareOffset <= compareMax; compareOffset += 1) {
+            if (primaryOffset === 0 && compareOffset === 0) continue;
+            if (primaryTokens[primaryIndex + primaryOffset].normalized !== compareTokens[compareIndex + compareOffset].normalized) continue;
+
+            const cost = primaryOffset + compareOffset;
+            if (!best || cost < best.cost) {
+                best = { primaryOffset, compareOffset, cost };
+            }
+        }
+    }
+
+    return best;
+}
+
+interface DiffToken {
+    raw: string;
+    normalized: string;
+}
+
+function tokenizeForDiff(text: string): DiffToken[] {
+    return (text.match(/\S+/g) || []).map((raw) => ({
+        raw,
+        normalized: normalizeDiffToken(raw),
+    }));
+}
+
+function normalizeDiffToken(token: string) {
+    const normalized = token
+        .toLowerCase()
+        .replace(/[“”]/g, '"')
+        .replace(/[‘’]/g, "'")
+        .replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
+
+    return normalized || token.toLowerCase();
+}
+
+function getDiffText(transcript?: Transcript | null) {
+    if (!transcript) return "";
+    if (transcript.segments?.length) {
+        return transcript.segments.map((segment) => segment.text.trim()).filter(Boolean).join(" ");
+    }
+    return transcript.text || "";
+}
+
+function renderDiffTokens(text: string, cursor: { current: number }, changedWords: Set<number>, side: DiffSide) {
+    const parts = text.match(/\s+|\S+/g) || [];
+    return parts.map((part, index) => {
+        if (/^\s+$/.test(part)) return part;
+
+        const tokenIndex = cursor.current;
+        cursor.current += 1;
+        const changed = changedWords.has(tokenIndex);
+        if (!changed) return part;
+
+        return (
+            <mark
+                key={`${tokenIndex}-${index}`}
+                className={cn(
+                    "rounded px-0.5 text-[var(--text-primary)]",
+                    side === "primary" && "bg-red-500/20 decoration-red-500/80 line-through decoration-2",
+                    side === "compare" && "bg-emerald-500/20 underline decoration-emerald-500/80 decoration-2 underline-offset-2"
+                )}
+            >
+                {part}
+            </mark>
+        );
+    });
+}
+
+function formatTimestamp(seconds: number) {
+    if (!Number.isFinite(seconds) || seconds < 0) return "00:00";
+    const totalSeconds = Math.floor(seconds);
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const remainingSeconds = totalSeconds % 60;
+
+    if (hours > 0) {
+        return `${hours}:${minutes.toString().padStart(2, "0")}:${remainingSeconds.toString().padStart(2, "0")}`;
+    }
+
+    return `${minutes}:${remainingSeconds.toString().padStart(2, "0")}`;
 }
 
 function ActiveBadge() {

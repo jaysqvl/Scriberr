@@ -119,21 +119,25 @@ export const TranscriptView = forwardRef<HTMLDivElement, TranscriptViewProps>(({
         };
     }, []);
 
-    // Expanded View Logic
+    const hasSegmentRows = Boolean(transcript?.segments?.length);
+
+    // Segmented View Logic
     const segmentRefs = useRef<(HTMLDivElement | null)[]>([]);
 
     // 1. Precompute per-segment text and offsets
     const expandedData = useMemo(() => {
-        if (!transcript?.segments || !transcript.word_segments) return [];
+        if (!transcript?.segments) return [];
 
         return transcript.segments.map((segment) => {
             // Filter words belonging to this segment
-            const segmentWords = transcript.word_segments!.filter(
+            const segmentWords = transcript.word_segments?.filter(
                 word => word.start >= segment.start - 0.1 && word.end <= segment.end + 0.1
-            );
+            ) || [];
 
             // Compute local offsets for this segment's text
-            const { fullText, offsets } = computeWordOffsets(segmentWords);
+            const { fullText, offsets } = segmentWords.length > 0
+                ? computeWordOffsets(segmentWords)
+                : { fullText: segment.text.trim(), offsets: [] };
 
             return {
                 ...segment,
@@ -158,7 +162,7 @@ export const TranscriptView = forwardRef<HTMLDivElement, TranscriptViewProps>(({
 
     // Auto-scroll to active segment during playback
     useEffect(() => {
-        if (mode !== 'expanded' || !autoScrollEnabled || !isPlaying) return;
+        if ((mode !== 'expanded' && !(mode === 'compact' && hasSegmentRows)) || !autoScrollEnabled || !isPlaying) return;
         if (activeSegmentIndex < 0) return;
         // Only scroll when the segment actually changes
         if (activeSegmentIndex === prevActiveSegmentRef.current) return;
@@ -168,11 +172,11 @@ export const TranscriptView = forwardRef<HTMLDivElement, TranscriptViewProps>(({
         if (el) {
             el.scrollIntoView({ behavior: 'smooth', block: 'center' });
         }
-    }, [activeSegmentIndex, autoScrollEnabled, isPlaying, mode]);
+    }, [activeSegmentIndex, autoScrollEnabled, hasSegmentRows, isPlaying, mode]);
 
-    // 2. Highlight Effect for Expanded View
+    // 2. Highlight Effect for Segmented Views
     useEffect(() => {
-        if (mode !== 'expanded' || !expandedData.length || !isPlaying) return;
+        if ((mode !== 'expanded' && !(mode === 'compact' && hasSegmentRows)) || !expandedData.length || !isPlaying) return;
         if (typeof CSS === 'undefined' || !CSS.highlights) return;
 
         // Find the active segment and word
@@ -217,7 +221,7 @@ export const TranscriptView = forwardRef<HTMLDivElement, TranscriptViewProps>(({
             if (CSS.highlights.has('karaoke-word')) CSS.highlights.delete('karaoke-word');
         }
 
-    }, [currentTime, isPlaying, mode, expandedData]);
+    }, [currentTime, expandedData, hasSegmentRows, isPlaying, mode]);
 
     // 3. Click Handler for Expanded View
     const handleExpandedClick = useCallback((e: React.MouseEvent, segmentIndex: number) => {
@@ -249,6 +253,56 @@ export const TranscriptView = forwardRef<HTMLDivElement, TranscriptViewProps>(({
 
     // Render transcript with word-level highlighting for compact view
     const renderCompactView = () => {
+        if (hasSegmentRows) {
+            return (
+                <div className="space-y-1.5">
+                    {expandedData.map((segment, i) => (
+                        <div
+                            key={i}
+                            className={cn(
+                                "group grid grid-cols-[72px_minmax(0,1fr)] gap-3 rounded-md border px-2.5 py-2 transition-colors sm:grid-cols-[96px_minmax(0,1fr)]",
+                                i === activeSegmentIndex && isPlaying
+                                    ? "border-[var(--brand-light)] bg-[var(--brand-light)]/30"
+                                    : "border-transparent hover:border-[var(--border-subtle)] hover:bg-[var(--bg-main)]/60"
+                            )}
+                        >
+                            <div className="min-w-0 select-none text-right">
+                                <div className="font-mono text-[10px] leading-5 text-[var(--text-tertiary)]">
+                                    {formatSegmentTime(segment.start)}
+                                </div>
+                                {segment.speaker && (
+                                    <div
+                                        className="truncate text-[10px] font-semibold uppercase tracking-wide text-[var(--brand-solid)]"
+                                        title={getDisplaySpeakerName(segment.speaker)}
+                                    >
+                                        {getDisplaySpeakerName(segment.speaker)}
+                                    </div>
+                                )}
+                            </div>
+                            <div
+                                ref={(el) => { segmentRefs.current[i] = el; }}
+                                onClick={isDesktop ? (e) => handleExpandedClick(e, i) : undefined}
+                                className={cn(
+                                    "min-w-0 text-sm leading-6 text-[var(--text-primary)] whitespace-pre-wrap font-reading transition-colors duration-200 select-text",
+                                    isDesktop && isModifierPressed ? 'cursor-pointer hover:text-carbon-900 dark:hover:text-carbon-100' : 'cursor-text'
+                                )}
+                                style={{
+                                    WebkitUserSelect: 'text',
+                                    userSelect: 'text',
+                                    WebkitTapHighlightColor: 'transparent',
+                                    touchAction: 'pan-y pinch-zoom',
+                                    WebkitTouchCallout: 'default'
+                                }}
+                                data-transcript-text
+                            >
+                                {segment.fullText || segment.text}
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            );
+        }
+
         if (!transcript.word_segments || transcript.word_segments.length === 0) {
             return <p className="text-lg leading-relaxed text-carbon-700 dark:text-carbon-300 whitespace-pre-wrap">{transcript.text}</p>;
         }
@@ -364,3 +418,17 @@ export const TranscriptView = forwardRef<HTMLDivElement, TranscriptViewProps>(({
 });
 
 TranscriptView.displayName = 'TranscriptView';
+
+function formatSegmentTime(seconds: number) {
+    if (!Number.isFinite(seconds) || seconds < 0) return "00:00";
+    const totalSeconds = Math.floor(seconds);
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const remainingSeconds = totalSeconds % 60;
+
+    if (hours > 0) {
+        return `${hours}:${minutes.toString().padStart(2, '0')}:${remainingSeconds.toString().padStart(2, '0')}`;
+    }
+
+    return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`;
+}
