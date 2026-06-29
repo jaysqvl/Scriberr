@@ -32,6 +32,7 @@ on:
         type: boolean
   push:
     tags:
+      - "v*.*.*"
       - "docker-build-*"
 
 permissions:
@@ -92,6 +93,12 @@ jobs:
             image_channel="${REF_NAME#docker-build-}"
             source_repository="$GITHUB_REPOSITORY_NAME"
             source_ref="$image_channel"
+            variants="all"
+            publish_latest="true"
+          elif [[ "$EVENT_NAME" == "push" && "$REF_NAME" == v*.*.* ]]; then
+            image_channel="${REF_NAME#v}"
+            source_repository="$GITHUB_REPOSITORY_NAME"
+            source_ref="$REF_NAME"
             variants="all"
             publish_latest="true"
           fi

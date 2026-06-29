@@ -89,55 +89,22 @@ changelog:
 
 # GitHub Release configuration
 release:
-  github:
-    owner: rishikanthc
-    name: Scriberr
   draft: false
   prerelease: auto
   mode: replace
   header: |
     ## Scriberr {{ .Tag }}
     
-    Welcome to this new release of Scriberr!
+    This is a jaysqvl/Scriberr fork release.
     
     ### Installation
     
-    #### Homebrew (macOS/Linux)
+    #### Docker
     ```bash
-    brew tap rishikanthc/scriberr
-    brew install scriberr
+    docker pull ghcr.io/jaysqvl/scriberr:{{ .Version }}
+    docker pull ghcr.io/jaysqvl/scriberr:{{ .Version }}-cuda
+    docker pull ghcr.io/jaysqvl/scriberr:{{ .Version }}-blackwell
     ```
     
     #### Manual Installation
     Download the appropriate archive for your platform below, extract it, and place the binary in your PATH.
-
-# Homebrew Tap configuration
-brews:
-  - name: scriberr
-    repository:
-      owner: rishikanthc
-      name: homebrew-scriberr
-      branch: main
-      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
-    # Ensure the formula is placed under the conventional Formula/ directory
-    directory: Formula
-    homepage: https://github.com/rishikanthc/Scriberr
-    description: "Audio transcription service using WhisperX with speaker diarization"
-    license: MIT
-    dependencies:
-      - name: uv
-      - name: ffmpeg
-      - name: deno
-    install: |
-      bin.install "scriberr"
-    test: |
-      system "#{bin}/scriberr", "--version"
-    caveats: |
-      Scriberr requires Python 3.11+ for transcription features.
-      Install with: brew install python@3.11
-      
-      To get started:
-      1. Run: scriberr
-      2. Open: http://localhost:8080
-      
-      The app will auto-configure itself on first run.

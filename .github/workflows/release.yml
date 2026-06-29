@@ -1,6 +1,11 @@
 name: Release
 
 on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag to release, for example v1.5.12.
+        required: true
   push:
     tags:
       - 'v*.*.*'
@@ -13,9 +18,30 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
+      - name: Resolve release tag
+        id: release
+        shell: bash
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            tag="$INPUT_TAG"
+          else
+            tag="${GITHUB_REF_NAME}"
+          fi
+
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Release tag must be semver with a leading v, for example v1.5.12."
+            exit 1
+          fi
+
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+
       - name: Checkout
         uses: actions/checkout@v7
         with:
+          ref: ${{ steps.release.outputs.tag }}
           fetch-depth: 0
 
       - name: Setup Go
@@ -33,8 +59,8 @@ jobs:
       - name: Install frontend dependencies
         run: cd web/frontend && npm ci
 
-      - name: Run tests
-        run: echo "Tests temporarily disabled - will re-enable after v1.0.0 release"
+      - name: Run backend tests
+        run: go test ./internal/... ./tests
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v7
@@ -44,4 +70,3 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
