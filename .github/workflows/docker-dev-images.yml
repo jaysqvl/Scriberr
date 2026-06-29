@@ -6,15 +6,15 @@ on:
       source_repository:
         description: Source repository to build.
         required: true
-        default: rishikanthc/Scriberr
+        default: jaysqvl/Scriberr
       upstream_ref:
         description: Upstream branch, tag, or SHA to build.
         required: true
-        default: nightly
+        default: main
       image_channel:
         description: Docker tag channel to publish.
         required: true
-        default: nightly
+        default: manual
       variants:
         description: Image variant to build.
         required: true
@@ -39,7 +39,7 @@ permissions:
   packages: write
 
 concurrency:
-  group: docker-dev-images-${{ github.event.inputs.upstream_ref || vars.SCRIBERR_UPSTREAM_REF || 'nightly' }}
+  group: docker-dev-images-${{ github.event.inputs.upstream_ref || vars.SCRIBERR_UPSTREAM_REF || github.ref_name }}
   cancel-in-progress: false
 
 env:
@@ -71,7 +71,6 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           REF_NAME: ${{ github.ref_name }}
-          RUN_STARTED_AT: ${{ github.run_started_at }}
           INPUT_SOURCE_REPOSITORY: ${{ github.event.inputs.source_repository }}
           INPUT_UPSTREAM_REF: ${{ github.event.inputs.upstream_ref }}
           INPUT_IMAGE_CHANNEL: ${{ github.event.inputs.image_channel }}
@@ -82,11 +81,12 @@ jobs:
           VAR_IMAGE_CHANNEL: ${{ vars.SCRIBERR_IMAGE_CHANNEL }}
           GITHUB_REPOSITORY_NAME: ${{ github.repository }}
         run: |
-          source_repository="${INPUT_SOURCE_REPOSITORY:-${VAR_SOURCE_REPOSITORY:-rishikanthc/Scriberr}}"
-          source_ref="${INPUT_UPSTREAM_REF:-${VAR_UPSTREAM_REF:-nightly}}"
-          image_channel="${INPUT_IMAGE_CHANNEL:-${VAR_IMAGE_CHANNEL:-nightly}}"
+          source_repository="${INPUT_SOURCE_REPOSITORY:-${VAR_SOURCE_REPOSITORY:-$GITHUB_REPOSITORY_NAME}}"
+          source_ref="${INPUT_UPSTREAM_REF:-${VAR_UPSTREAM_REF:-main}}"
+          image_channel="${INPUT_IMAGE_CHANNEL:-${VAR_IMAGE_CHANNEL:-manual}}"
           variants="${INPUT_VARIANTS:-all}"
           publish_latest="${INPUT_PUBLISH_LATEST:-false}"
+          build_date="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
           if [[ "$EVENT_NAME" == "push" && "$REF_NAME" == docker-build-* ]]; then
             image_channel="${REF_NAME#docker-build-}"
@@ -102,7 +102,7 @@ jobs:
             echo "image_channel=$image_channel"
             echo "variants=$variants"
             echo "publish_latest=$publish_latest"
-            echo "build_date=${RUN_STARTED_AT:-unknown}"
+            echo "build_date=$build_date"
           } >> "$GITHUB_OUTPUT"
 
       - name: Check selected variant
@@ -117,7 +117,7 @@ jobs:
 
       - name: Checkout upstream source
         if: steps.variant.outputs.enabled == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: ${{ steps.settings.outputs.source_repository }}
           ref: ${{ steps.settings.outputs.source_ref }}
@@ -146,11 +146,11 @@ jobs:
 
       - name: Set up Docker Buildx
         if: steps.variant.outputs.enabled == 'true' && steps.dockerfile.outputs.exists == 'true'
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to GitHub Container Registry
         if: steps.variant.outputs.enabled == 'true' && steps.dockerfile.outputs.exists == 'true'
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -184,13 +184,15 @@ jobs:
             fi
           fi
 
-          echo "tags<<EOF" >> "$GITHUB_OUTPUT"
-          printf '%s\n' "$tags" >> "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
+          {
+            echo "tags<<EOF"
+            printf '%s\n' "$tags"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Build and push image
         if: steps.variant.outputs.enabled == 'true' && steps.dockerfile.outputs.exists == 'true'
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: ${{ matrix.dockerfile }}
