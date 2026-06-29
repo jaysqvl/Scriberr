@@ -351,6 +351,11 @@ func (m *MockJobRepository) FindLatestExecution(ctx context.Context, jobID strin
 	return args.Get(0).(*models.TranscriptionJobExecution), args.Error(1)
 }
 
+func (m *MockJobRepository) SetPinnedExecution(ctx context.Context, jobID string, executionID *string) error {
+	args := m.Called(ctx, jobID, executionID)
+	return args.Error(0)
+}
+
 func (m *MockJobRepository) DeleteExecutionsByJobID(ctx context.Context, jobID string) error {
 	args := m.Called(ctx, jobID)
 	return args.Error(0)

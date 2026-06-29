@@ -23,10 +23,11 @@ import { EmberPlayer, type EmberPlayerRef } from "@/components/audio/EmberPlayer
 import { cn } from "@/lib/utils";
 
 // Custom Hooks
-import { useAudioDetail, useExecutionRuns, useRunTranscript, useUpdateTitle, useTranscript, type ExecutionRun, type Transcript, type TranscriptSegment } from "@/features/transcription/hooks/useAudioDetail";
+import { useAudioDetail, useExecutionRuns, useRunTranscript, useSetActiveRun, useUpdateTitle, useTranscript, type ExecutionRun, type Transcript, type TranscriptSegment } from "@/features/transcription/hooks/useAudioDetail";
 import { useSpeakerMappings } from "@/features/transcription/hooks/useTranscriptionSpeakers";
 import { useTranscriptDownload } from "@/features/transcription/hooks/useTranscriptDownload";
 import { useAuth } from "@/features/auth/hooks/useAuth";
+import { useToast } from "@/components/ui/toast";
 import { TranscriptionConfigDialog, type WhisperXParams } from "@/components/TranscriptionConfigDialog";
 import { TranscribeDDialog } from "@/components/TranscribeDDialog";
 
@@ -51,6 +52,7 @@ export const AudioDetailView = function AudioDetailView({ audioId: propAudioId }
     const navigate = useNavigate();
     const queryClient = useQueryClient();
     const { getAuthHeaders } = useAuth();
+    const { toast } = useToast();
 
     // Refs
     const audioPlayerRef = useRef<EmberPlayerRef>(null);
@@ -89,6 +91,7 @@ export const AudioDetailView = function AudioDetailView({ audioId: propAudioId }
     // Data Fetching
     const { data: audioFile, isLoading, error } = useAudioDetail(audioId || "");
     const { mutate: updateTitle } = useUpdateTitle(audioId || "");
+    const { mutateAsync: setActiveRun, isPending: activeRunUpdating } = useSetActiveRun(audioId || "");
     // Fetch transcript & speakers here to support menu actions
     const { data: latestTranscript } = useTranscript(audioId || "", true);
     const { data: runsData } = useExecutionRuns(audioId || "", !!audioId);
@@ -310,6 +313,36 @@ export const AudioDetailView = function AudioDetailView({ audioId: propAudioId }
         setLogsDialogRunId(runId);
         setLogsDialogOpen(true);
     }, []);
+
+    const handleSetActiveRun = useCallback(async (runId: string) => {
+        if (!audioId) return;
+
+        try {
+            await setActiveRun(runId);
+            setSelectedRunId(runId);
+            toast({ title: "Active run pinned" });
+        } catch (err) {
+            toast({
+                title: "Could not pin run",
+                description: err instanceof Error ? err.message : "The selected run could not be made active.",
+            });
+        }
+    }, [audioId, setActiveRun, toast]);
+
+    const handleClearActiveRun = useCallback(async () => {
+        if (!audioId) return;
+
+        try {
+            await setActiveRun(null);
+            setSelectedRunId(undefined);
+            toast({ title: "Using latest completed run" });
+        } catch (err) {
+            toast({
+                title: "Could not clear active pin",
+                description: err instanceof Error ? err.message : "The active run pin could not be cleared.",
+            });
+        }
+    }, [audioId, setActiveRun, toast]);
 
     const handleOpenRerunAdvanced = useCallback(() => {
         setRerunProfileDialogOpen(false);
@@ -553,6 +586,8 @@ export const AudioDetailView = function AudioDetailView({ audioId: propAudioId }
                                 <RunWorkspace
                                     runs={runs}
                                     activeRunId={runsData?.active_run_id}
+                                    pinnedRunId={runsData?.pinned_run_id}
+                                    activeRunPinned={Boolean(runsData?.active_run_pinned)}
                                     selectedRunId={selectedRunId}
                                     compareRunId={compareRunId}
                                     mode={runViewMode}
@@ -571,6 +606,9 @@ export const AudioDetailView = function AudioDetailView({ audioId: propAudioId }
                                     onOpenRunDetails={handleOpenRunDetails}
                                     onOpenRunLogs={handleOpenRunLogs}
                                     onDownloadRun={handleRunDownload}
+                                    onSetActiveRun={handleSetActiveRun}
+                                    onClearActiveRun={handleClearActiveRun}
+                                    activeRunUpdating={activeRunUpdating}
                                 />
 
                                 {/* Transcript */}

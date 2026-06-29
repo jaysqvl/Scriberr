@@ -435,6 +435,20 @@
       "tag": "transcription"
     },
     {
+      "method": "POST",
+      "path": "/api/v1/transcription/{id}/runs/{run_id}/active",
+      "summary": "Set active transcription run",
+      "description": "Pin a completed run as the active transcript source for a transcription job",
+      "tag": "transcription"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/transcription/{id}/runs/active",
+      "summary": "Clear active transcription run",
+      "description": "Clear a pinned active run so the latest completed run becomes active again",
+      "tag": "transcription"
+    },
+    {
       "method": "GET",
       "path": "/api/v1/transcription/{id}/runs/{run_id}/transcript",
       "summary": "Get run transcript",

@@ -624,6 +624,40 @@ func (h *Handler) GetTranscript(c *gin.Context) {
 		return
 	}
 
+	if err := h.preserveCurrentRunSnapshot(c.Request.Context(), job); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to prepare active transcript"})
+		return
+	}
+
+	if activeExecution, activePinned, err := h.resolveActiveExecution(c.Request.Context(), job); err == nil && activeExecution.Transcript != nil {
+		transcript, err := parseTranscriptPayload(*activeExecution.Transcript)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to parse transcript"})
+			return
+		}
+
+		pinnedRunID := ""
+		if job.PinnedExecutionID != nil {
+			pinnedRunID = *job.PinnedExecutionID
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"job_id":            job.ID,
+			"title":             job.Title,
+			"run_id":            activeExecution.ID,
+			"active_run_pinned": activePinned,
+			"pinned_run_id":     pinnedRunID,
+			"transcript":        transcript,
+			"status":            job.Status,
+			"available":         true,
+			"created_at":        job.CreatedAt,
+			"updated_at":        job.UpdatedAt,
+		})
+		return
+	} else if err != nil && err != gorm.ErrRecordNotFound {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to resolve active transcript"})
+		return
+	}
+
 	// Return empty transcript gracefully for non-completed jobs
 	if job.Status != models.StatusCompleted {
 		c.JSON(http.StatusOK, gin.H{
@@ -1130,7 +1164,12 @@ func (h *Handler) GetJobExecutionData(c *gin.Context) {
 		return
 	}
 
-	execution, err := h.jobRepo.FindLatestCompletedExecution(c.Request.Context(), jobID)
+	if err := h.preserveCurrentRunSnapshot(c.Request.Context(), job); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to prepare execution data"})
+		return
+	}
+
+	execution, activePinned, err := h.resolveActiveExecution(c.Request.Context(), job)
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
 			// Return graceful empty response instead of 404
@@ -1139,6 +1178,7 @@ func (h *Handler) GetJobExecutionData(c *gin.Context) {
 				"available":            false,
 				"message":              "No execution data available for this job",
 				"is_multi_track":       job.IsMultiTrack,
+				"active_run_pinned":    false,
 			})
 			return
 		}
@@ -1146,10 +1186,17 @@ func (h *Handler) GetJobExecutionData(c *gin.Context) {
 		return
 	}
 
+	pinnedRunID := ""
+	if job.PinnedExecutionID != nil {
+		pinnedRunID = *job.PinnedExecutionID
+	}
+
 	// Create enhanced response with multi-track data
 	response := gin.H{
 		"id":                   execution.ID,
 		"transcription_job_id": execution.TranscriptionJobID,
+		"active_run_pinned":    activePinned,
+		"pinned_run_id":        pinnedRunID,
 		"started_at":           execution.StartedAt,
 		"completed_at":         execution.CompletedAt,
 		"processing_duration":  execution.ProcessingDuration,

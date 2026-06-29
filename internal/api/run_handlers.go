@@ -97,8 +97,17 @@ func (h *Handler) ListJobRuns(c *gin.Context) {
 	}
 
 	activeRunID := ""
-	if latest, err := h.jobRepo.FindLatestCompletedExecution(c.Request.Context(), jobID); err == nil {
-		activeRunID = latest.ID
+	pinnedRunID := ""
+	activeRunPinned := false
+	if job.PinnedExecutionID != nil {
+		pinnedRunID = *job.PinnedExecutionID
+	}
+	if active, pinned, err := h.resolveActiveExecution(c.Request.Context(), job); err == nil {
+		activeRunID = active.ID
+		activeRunPinned = pinned
+	} else if err != gorm.ErrRecordNotFound {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to resolve active run"})
+		return
 	}
 
 	runs := make([]gin.H, 0, len(executions))
@@ -108,9 +117,118 @@ func (h *Handler) ListJobRuns(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"job_id":        jobID,
-		"active_run_id": activeRunID,
-		"runs":          runs,
+		"job_id":            jobID,
+		"active_run_id":     activeRunID,
+		"pinned_run_id":     pinnedRunID,
+		"active_run_pinned": activeRunPinned,
+		"runs":              runs,
+	})
+}
+
+// SetActiveRun pins one completed run as the active transcript source.
+// @Summary Set active transcription run
+// @Description Pin a completed run as the active transcript source for a transcription job
+// @Tags transcription
+// @Produce json
+// @Param id path string true "Job ID"
+// @Param run_id path string true "Run ID"
+// @Success 200 {object} map[string]interface{}
+// @Failure 400 {object} map[string]string
+// @Failure 404 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/v1/transcription/{id}/runs/{run_id}/active [post]
+// @Security ApiKeyAuth
+// @Security BearerAuth
+func (h *Handler) SetActiveRun(c *gin.Context) {
+	jobID := c.Param("id")
+	runID := c.Param("run_id")
+
+	if _, err := h.jobRepo.FindByID(c.Request.Context(), jobID); err != nil {
+		if err == gorm.ErrRecordNotFound {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Job not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get job"})
+		return
+	}
+
+	execution, err := h.jobRepo.FindExecution(c.Request.Context(), jobID, runID)
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Run not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get run"})
+		return
+	}
+
+	if execution.Status != models.StatusCompleted {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Only completed runs can be active"})
+		return
+	}
+	if execution.Transcript == nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Run has no transcript to make active"})
+		return
+	}
+
+	pinnedRunID := execution.ID
+	if err := h.jobRepo.SetPinnedExecution(c.Request.Context(), jobID, &pinnedRunID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to set active run"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"job_id":            jobID,
+		"active_run_id":     execution.ID,
+		"pinned_run_id":     execution.ID,
+		"active_run_pinned": true,
+	})
+}
+
+// ClearActiveRun clears the pinned active run and returns to latest-completed fallback.
+// @Summary Clear active transcription run
+// @Description Clear a pinned active run so the latest completed run becomes active again
+// @Tags transcription
+// @Produce json
+// @Param id path string true "Job ID"
+// @Success 200 {object} map[string]interface{}
+// @Failure 404 {object} map[string]string
+// @Failure 500 {object} map[string]string
+// @Router /api/v1/transcription/{id}/runs/active [delete]
+// @Security ApiKeyAuth
+// @Security BearerAuth
+func (h *Handler) ClearActiveRun(c *gin.Context) {
+	jobID := c.Param("id")
+
+	job, err := h.jobRepo.FindByID(c.Request.Context(), jobID)
+	if err != nil {
+		if err == gorm.ErrRecordNotFound {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Job not found"})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get job"})
+		return
+	}
+
+	if err := h.jobRepo.SetPinnedExecution(c.Request.Context(), jobID, nil); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to clear active run"})
+		return
+	}
+	job.PinnedExecutionID = nil
+
+	activeRunID := ""
+	if active, _, err := h.resolveActiveExecution(c.Request.Context(), job); err == nil {
+		activeRunID = active.ID
+	} else if err != gorm.ErrRecordNotFound {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to resolve active run"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"job_id":            jobID,
+		"active_run_id":     activeRunID,
+		"pinned_run_id":     "",
+		"active_run_pinned": false,
 	})
 }
 
@@ -195,6 +313,28 @@ func (h *Handler) GetRunLogs(c *gin.Context) {
 	}
 
 	h.writeRunLogResponse(c, jobID, runID, execution.LogPath)
+}
+
+func (h *Handler) resolveActiveExecution(ctx context.Context, job *models.TranscriptionJob) (*models.TranscriptionJobExecution, bool, error) {
+	if job == nil {
+		return nil, false, gorm.ErrRecordNotFound
+	}
+
+	if job.PinnedExecutionID != nil && *job.PinnedExecutionID != "" {
+		execution, err := h.jobRepo.FindExecution(ctx, job.ID, *job.PinnedExecutionID)
+		if err != nil && err != gorm.ErrRecordNotFound {
+			return nil, false, err
+		}
+		if err == nil && execution.Status == models.StatusCompleted {
+			return execution, true, nil
+		}
+	}
+
+	execution, err := h.jobRepo.FindLatestCompletedExecution(ctx, job.ID)
+	if err != nil {
+		return nil, false, err
+	}
+	return execution, false, nil
 }
 
 func (h *Handler) executionRunResponse(execution models.TranscriptionJobExecution, runNumber int) gin.H {

@@ -53,6 +53,8 @@ export interface ExecutionRun extends ExecutionData {
 export interface ExecutionRunsData {
     job_id: string;
     active_run_id?: string;
+    pinned_run_id?: string;
+    active_run_pinned?: boolean;
     runs: ExecutionRun[];
 }
 
@@ -202,6 +204,38 @@ export function useExecutionRuns(audioId: string, enabled = true) {
             return response.json() as Promise<ExecutionRunsData>;
         },
         enabled: enabled && !!audioId,
+    });
+}
+
+export function useSetActiveRun(audioId: string) {
+    const { getAuthHeaders } = useAuth();
+    const queryClient = useQueryClient();
+
+    return useMutation({
+        mutationFn: async (runId?: string | null) => {
+            const response = await fetch(
+                runId
+                    ? `/api/v1/transcription/${audioId}/runs/${runId}/active`
+                    : `/api/v1/transcription/${audioId}/runs/active`,
+                {
+                    method: runId ? "POST" : "DELETE",
+                    headers: getAuthHeaders(),
+                }
+            );
+            if (!response.ok) {
+                const errorText = await response.text();
+                throw new Error(errorText || "Failed to update active run");
+            }
+            return response.json() as Promise<ExecutionRunsData>;
+        },
+        onSuccess: async () => {
+            await Promise.all([
+                queryClient.invalidateQueries({ queryKey: ["executionRuns", audioId] }),
+                queryClient.invalidateQueries({ queryKey: ["executionData", audioId] }),
+                queryClient.invalidateQueries({ queryKey: ["transcript", audioId] }),
+                queryClient.invalidateQueries({ queryKey: ["audio", audioId] }),
+            ]);
+        },
     });
 }
 

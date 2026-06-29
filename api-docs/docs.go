@@ -2826,7 +2826,8 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/models.TranscriptionJobExecution"
+                            "type": "object",
+                            "additionalProperties": true
                         }
                     },
                     "404": {
@@ -2851,7 +2852,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Cancel a currently running transcription job",
+                "description": "Cancel a currently running or queued transcription job",
                 "produces": [
                     "application/json"
                 ],
@@ -3059,6 +3060,392 @@ const docTemplate = `{
                     },
                     "404": {
                         "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/transcription/{id}/rerun": {
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    },
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Start transcription for an already uploaded audio file",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "transcription"
+                ],
+                "summary": "Start transcription for uploaded file",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Job ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Transcription parameters",
+                        "name": "parameters",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/models.WhisperXParams"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/models.TranscriptionJob"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/transcription/{id}/runs": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    },
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "List every transcription attempt for a job, including timing, status, and captured parameter metadata",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "transcription"
+                ],
+                "summary": "List transcription runs",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Job ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/transcription/{id}/runs/active": {
+            "delete": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    },
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Clear a pinned active run so the latest completed run becomes active again",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "transcription"
+                ],
+                "summary": "Clear active transcription run",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Job ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/transcription/{id}/runs/{run_id}/active": {
+            "post": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    },
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Pin a completed run as the active transcript source for a transcription job",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "transcription"
+                ],
+                "summary": "Set active transcription run",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Job ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Run ID",
+                        "name": "run_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/transcription/{id}/runs/{run_id}/logs": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    },
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Get the log snapshot captured for a specific transcription run",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "transcription"
+                ],
+                "summary": "Get run logs",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Job ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Run ID",
+                        "name": "run_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/transcription/{id}/runs/{run_id}/transcript": {
+            "get": {
+                "security": [
+                    {
+                        "ApiKeyAuth": []
+                    },
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Get the transcript snapshot captured for a specific transcription run",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "transcription"
+                ],
+                "summary": "Get run transcript",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Job ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Run ID",
+                        "name": "run_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": {
+                                "type": "string"
+                            }
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
                         "schema": {
                             "type": "object",
                             "additionalProperties": {
@@ -3793,7 +4180,7 @@ const docTemplate = `{
             "get": {
                 "description": "Get the raw transcription logs for a job",
                 "produces": [
-                    "text/plain"
+                    "application/json"
                 ],
                 "tags": [
                     "transcription"
@@ -3810,9 +4197,10 @@ const docTemplate = `{
                 ],
                 "responses": {
                     "200": {
-                        "description": "Log content",
+                        "description": "OK",
                         "schema": {
-                            "type": "string"
+                            "type": "object",
+                            "additionalProperties": true
                         }
                     },
                     "404": {
@@ -4669,6 +5057,9 @@ const docTemplate = `{
                         }
                     ]
                 },
+                "pinned_execution_id": {
+                    "type": "string"
+                },
                 "status": {
                     "$ref": "#/definitions/models.JobStatus"
                 },
@@ -4679,76 +5070,6 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "transcript": {
-                    "type": "string"
-                },
-                "updated_at": {
-                    "type": "string"
-                }
-            }
-        },
-        "models.TranscriptionJobExecution": {
-            "type": "object",
-            "properties": {
-                "actual_parameters": {
-                    "description": "Parameters used for this execution (may differ from job parameters due to profiles)",
-                    "allOf": [
-                        {
-                            "$ref": "#/definitions/models.WhisperXParams"
-                        }
-                    ]
-                },
-                "completed_at": {
-                    "type": "string"
-                },
-                "created_at": {
-                    "description": "Metadata",
-                    "type": "string"
-                },
-                "error_message": {
-                    "type": "string"
-                },
-                "id": {
-                    "type": "string"
-                },
-                "merge_duration": {
-                    "description": "Merge phase duration in milliseconds",
-                    "type": "integer"
-                },
-                "merge_end_time": {
-                    "type": "string"
-                },
-                "merge_start_time": {
-                    "type": "string"
-                },
-                "multi_track_timings": {
-                    "description": "Multi-track specific timing data",
-                    "type": "string"
-                },
-                "processing_duration": {
-                    "description": "Duration in milliseconds",
-                    "type": "integer"
-                },
-                "started_at": {
-                    "description": "Execution timing",
-                    "type": "string"
-                },
-                "status": {
-                    "description": "Execution results",
-                    "allOf": [
-                        {
-                            "$ref": "#/definitions/models.JobStatus"
-                        }
-                    ]
-                },
-                "transcription_job": {
-                    "description": "Relationship",
-                    "allOf": [
-                        {
-                            "$ref": "#/definitions/models.TranscriptionJob"
-                        }
-                    ]
-                },
-                "transcription_job_id": {
                     "type": "string"
                 },
                 "updated_at": {
@@ -4794,7 +5115,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "attention_context_left": {
-                    "description": "NVIDIA Parakeet-specific parameters for long-form audio",
+                    "description": "NVIDIA model-specific parameters",
                     "type": "integer"
                 },
                 "attention_context_right": {
@@ -4905,6 +5226,24 @@ const docTemplate = `{
                 },
                 "no_speech_threshold": {
                     "type": "number"
+                },
+                "nvidia_chunk_duration": {
+                    "type": "integer"
+                },
+                "nvidia_precision": {
+                    "type": "string"
+                },
+                "nvidia_prompt": {
+                    "type": "string"
+                },
+                "nvidia_target_language": {
+                    "type": "string"
+                },
+                "nvidia_timestamps": {
+                    "type": "boolean"
+                },
+                "nvidia_use_chunking": {
+                    "type": "boolean"
                 },
                 "output_format": {
                     "description": "Output settings",

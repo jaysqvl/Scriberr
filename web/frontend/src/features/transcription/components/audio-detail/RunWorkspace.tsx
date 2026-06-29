@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { Activity, AlertCircle, Download, FileText, GitCompareArrows, Info, Loader2, MoreVertical, RefreshCw, ScrollText, Settings2, StopCircle } from "lucide-react";
+import { Activity, AlertCircle, Download, FileText, GitCompareArrows, Info, Loader2, MoreVertical, Pin, PinOff, RefreshCw, ScrollText, Settings2, StopCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
     DropdownMenu,
@@ -35,6 +35,8 @@ interface TranscriptDiff {
 interface RunWorkspaceProps {
     runs: ExecutionRun[];
     activeRunId?: string;
+    pinnedRunId?: string;
+    activeRunPinned?: boolean;
     selectedRunId?: string;
     compareRunId?: string;
     mode: RunWorkspaceMode;
@@ -53,11 +55,16 @@ interface RunWorkspaceProps {
     onOpenRunDetails: (runId?: string) => void;
     onOpenRunLogs: (runId?: string) => void;
     onDownloadRun: (run: ExecutionRun, format: DownloadFormat, transcript?: Transcript | null) => void;
+    onSetActiveRun: (runId: string) => void;
+    onClearActiveRun: () => void;
+    activeRunUpdating?: boolean;
 }
 
 export function RunWorkspace({
     runs,
     activeRunId,
+    pinnedRunId,
+    activeRunPinned = false,
     selectedRunId,
     compareRunId,
     mode,
@@ -76,6 +83,9 @@ export function RunWorkspace({
     onOpenRunDetails,
     onOpenRunLogs,
     onDownloadRun,
+    onSetActiveRun,
+    onClearActiveRun,
+    activeRunUpdating = false,
 }: RunWorkspaceProps) {
     const selectedRun = runs.find((run) => run.id === selectedRunId) || runs[0];
     const compareRun = runs.find((run) => run.id === compareRunId) || runs.find((run) => run.id !== selectedRun?.id);
@@ -122,7 +132,7 @@ export function RunWorkspace({
                             </span>
                         </h2>
                         <p className="mt-1 text-sm text-[var(--text-secondary)]">
-                            Select a run to drive the transcript below, or compare two runs side by side.
+                            Select a run to drive the transcript below, pin the best one as active, or compare two runs side by side.
                         </p>
                     </div>
 
@@ -199,11 +209,16 @@ export function RunWorkspace({
                     <SelectedRunPanel
                         run={selectedRun}
                         active={selectedRun?.id === activeRunId}
+                        pinned={selectedRun?.id === pinnedRunId && activeRunPinned}
+                        activeRunPinned={activeRunPinned}
                         transcript={selectedTranscript}
                         transcriptLoading={selectedTranscriptLoading}
                         onOpenRunDetails={onOpenRunDetails}
                         onOpenRunLogs={onOpenRunLogs}
                         onDownloadRun={onDownloadRun}
+                        onSetActiveRun={onSetActiveRun}
+                        onClearActiveRun={onClearActiveRun}
+                        activeRunUpdating={activeRunUpdating}
                     />
                 )}
             </div>
@@ -260,19 +275,29 @@ function RunControl({
 function SelectedRunPanel({
     run,
     active,
+    pinned,
+    activeRunPinned,
     transcript,
     transcriptLoading,
     onOpenRunDetails,
     onOpenRunLogs,
     onDownloadRun,
+    onSetActiveRun,
+    onClearActiveRun,
+    activeRunUpdating,
 }: {
     run?: ExecutionRun;
     active: boolean;
+    pinned: boolean;
+    activeRunPinned: boolean;
     transcript?: Transcript | null;
     transcriptLoading: boolean;
     onOpenRunDetails: (runId?: string) => void;
     onOpenRunLogs: (runId?: string) => void;
     onDownloadRun: (run: ExecutionRun, format: DownloadFormat, transcript?: Transcript | null) => void;
+    onSetActiveRun: (runId: string) => void;
+    onClearActiveRun: () => void;
+    activeRunUpdating: boolean;
 }) {
     if (!run) return null;
     const params = (run.actual_parameters || {}) as Partial<WhisperXParams>;
@@ -285,20 +310,32 @@ function SelectedRunPanel({
                         <div className="flex flex-wrap items-center gap-2">
                             <h3 className="text-xl font-bold text-[var(--text-primary)]">Run {run.run_number}</h3>
                             {active && <ActiveBadge />}
+                            {pinned && <PinnedBadge />}
                             <StatusPill status={run.status || "unknown"} />
                         </div>
                         <p className="mt-1 text-sm text-[var(--text-secondary)]">
                             {modelLabel(params.model_family, params.model)}
                         </p>
                     </div>
-                    <RunActions
-                        run={run}
-                        transcript={transcript}
-                        transcriptLoading={transcriptLoading}
-                        onOpenRunDetails={onOpenRunDetails}
-                        onOpenRunLogs={onOpenRunLogs}
-                        onDownloadRun={onDownloadRun}
-                    />
+                    <div className="flex flex-wrap items-center gap-2">
+                        <ActiveRunButton
+                            run={run}
+                            active={active}
+                            pinned={pinned}
+                            activeRunPinned={activeRunPinned}
+                            updating={activeRunUpdating}
+                            onSetActiveRun={onSetActiveRun}
+                            onClearActiveRun={onClearActiveRun}
+                        />
+                        <RunActions
+                            run={run}
+                            transcript={transcript}
+                            transcriptLoading={transcriptLoading}
+                            onOpenRunDetails={onOpenRunDetails}
+                            onOpenRunLogs={onOpenRunLogs}
+                            onDownloadRun={onDownloadRun}
+                        />
+                    </div>
                 </div>
 
                 {run.error_message && (
@@ -331,6 +368,69 @@ function SelectedRunPanel({
                 </div>
             </div>
         </div>
+    );
+}
+
+function ActiveRunButton({
+    run,
+    active,
+    pinned,
+    activeRunPinned,
+    updating,
+    onSetActiveRun,
+    onClearActiveRun,
+}: {
+    run: ExecutionRun;
+    active: boolean;
+    pinned: boolean;
+    activeRunPinned: boolean;
+    updating: boolean;
+    onSetActiveRun: (runId: string) => void;
+    onClearActiveRun: () => void;
+}) {
+    const canPin = run.status === "completed" && run.has_transcript !== false;
+
+    if (pinned) {
+        return (
+            <Button
+                variant="outline"
+                size="sm"
+                onClick={onClearActiveRun}
+                disabled={updating}
+                className="gap-2 rounded-full border-[var(--border-subtle)] bg-[var(--bg-card)]"
+            >
+                {updating ? <Loader2 className="h-4 w-4 animate-spin" /> : <PinOff className="h-4 w-4" />}
+                Use Latest
+            </Button>
+        );
+    }
+
+    if (active && !activeRunPinned) {
+        return (
+            <Button
+                variant="outline"
+                size="sm"
+                onClick={() => onSetActiveRun(run.id)}
+                disabled={updating || !canPin}
+                className="gap-2 rounded-full border-[var(--border-subtle)] bg-[var(--bg-card)]"
+            >
+                {updating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Pin className="h-4 w-4" />}
+                Pin Active
+            </Button>
+        );
+    }
+
+    return (
+        <Button
+            variant="outline"
+            size="sm"
+            onClick={() => onSetActiveRun(run.id)}
+            disabled={updating || !canPin}
+            className="gap-2 rounded-full border-[var(--border-subtle)] bg-[var(--bg-card)]"
+        >
+            {updating ? <Loader2 className="h-4 w-4 animate-spin" /> : <Pin className="h-4 w-4" />}
+            Make Active
+        </Button>
     );
 }
 
@@ -773,6 +873,14 @@ function ActiveBadge() {
     return (
         <span className="rounded-full bg-[var(--brand-light)] px-2 py-0.5 text-[10px] font-semibold uppercase text-[var(--brand-solid)]">
             Active
+        </span>
+    );
+}
+
+function PinnedBadge() {
+    return (
+        <span className="rounded-full bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase text-amber-700 dark:text-amber-300">
+            Pinned
         </span>
     );
 }

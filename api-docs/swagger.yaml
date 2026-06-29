@@ -560,6 +560,8 @@ definitions:
         allOf:
         - $ref: '#/definitions/models.WhisperXParams'
         description: WhisperX parameters
+      pinned_execution_id:
+        type: string
       status:
         $ref: '#/definitions/models.JobStatus'
       summary:
@@ -567,51 +569,6 @@ definitions:
       title:
         type: string
       transcript:
-        type: string
-      updated_at:
-        type: string
-    type: object
-  models.TranscriptionJobExecution:
-    properties:
-      actual_parameters:
-        allOf:
-        - $ref: '#/definitions/models.WhisperXParams'
-        description: Parameters used for this execution (may differ from job parameters
-          due to profiles)
-      completed_at:
-        type: string
-      created_at:
-        description: Metadata
-        type: string
-      error_message:
-        type: string
-      id:
-        type: string
-      merge_duration:
-        description: Merge phase duration in milliseconds
-        type: integer
-      merge_end_time:
-        type: string
-      merge_start_time:
-        type: string
-      multi_track_timings:
-        description: Multi-track specific timing data
-        type: string
-      processing_duration:
-        description: Duration in milliseconds
-        type: integer
-      started_at:
-        description: Execution timing
-        type: string
-      status:
-        allOf:
-        - $ref: '#/definitions/models.JobStatus'
-        description: Execution results
-      transcription_job:
-        allOf:
-        - $ref: '#/definitions/models.TranscriptionJob'
-        description: Relationship
-      transcription_job_id:
         type: string
       updated_at:
         type: string
@@ -642,7 +599,7 @@ definitions:
         description: OpenAI settings
         type: string
       attention_context_left:
-        description: NVIDIA Parakeet-specific parameters for long-form audio
+        description: NVIDIA model-specific parameters
         type: integer
       attention_context_right:
         type: integer
@@ -720,6 +677,18 @@ definitions:
         type: boolean
       no_speech_threshold:
         type: number
+      nvidia_chunk_duration:
+        type: integer
+      nvidia_precision:
+        type: string
+      nvidia_prompt:
+        type: string
+      nvidia_target_language:
+        type: string
+      nvidia_timestamps:
+        type: boolean
+      nvidia_use_chunking:
+        type: boolean
       output_format:
         description: Output settings
         type: string
@@ -2153,7 +2122,8 @@ paths:
         "200":
           description: OK
           schema:
-            $ref: '#/definitions/models.TranscriptionJobExecution'
+            additionalProperties: true
+            type: object
         "404":
           description: Not Found
           schema:
@@ -2168,7 +2138,7 @@ paths:
       - transcription
   /api/v1/transcription/{id}/kill:
     post:
-      description: Cancel a currently running transcription job
+      description: Cancel a currently running or queued transcription job
       parameters:
       - description: Job ID
         in: path
@@ -2309,6 +2279,254 @@ paths:
       summary: Create a note for a transcription
       tags:
       - notes
+  /api/v1/transcription/{id}/rerun:
+    post:
+      consumes:
+      - application/json
+      description: Start transcription for an already uploaded audio file
+      parameters:
+      - description: Job ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Transcription parameters
+        in: body
+        name: parameters
+        required: true
+        schema:
+          $ref: '#/definitions/models.WhisperXParams'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/models.TranscriptionJob'
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - ApiKeyAuth: []
+      - BearerAuth: []
+      summary: Start transcription for uploaded file
+      tags:
+      - transcription
+  /api/v1/transcription/{id}/runs:
+    get:
+      description: List every transcription attempt for a job, including timing, status,
+        and captured parameter metadata
+      parameters:
+      - description: Job ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - ApiKeyAuth: []
+      - BearerAuth: []
+      summary: List transcription runs
+      tags:
+      - transcription
+  /api/v1/transcription/{id}/runs/{run_id}/active:
+    post:
+      description: Pin a completed run as the active transcript source for a transcription
+        job
+      parameters:
+      - description: Job ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Run ID
+        in: path
+        name: run_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "400":
+          description: Bad Request
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - ApiKeyAuth: []
+      - BearerAuth: []
+      summary: Set active transcription run
+      tags:
+      - transcription
+  /api/v1/transcription/{id}/runs/{run_id}/logs:
+    get:
+      description: Get the log snapshot captured for a specific transcription run
+      parameters:
+      - description: Job ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Run ID
+        in: path
+        name: run_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "403":
+          description: Forbidden
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - ApiKeyAuth: []
+      - BearerAuth: []
+      summary: Get run logs
+      tags:
+      - transcription
+  /api/v1/transcription/{id}/runs/{run_id}/transcript:
+    get:
+      description: Get the transcript snapshot captured for a specific transcription
+        run
+      parameters:
+      - description: Job ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Run ID
+        in: path
+        name: run_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - ApiKeyAuth: []
+      - BearerAuth: []
+      summary: Get run transcript
+      tags:
+      - transcription
+  /api/v1/transcription/{id}/runs/active:
+    delete:
+      description: Clear a pinned active run so the latest completed run becomes active
+        again
+      parameters:
+      - description: Job ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            additionalProperties: true
+            type: object
+        "404":
+          description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+      security:
+      - ApiKeyAuth: []
+      - BearerAuth: []
+      summary: Clear active transcription run
+      tags:
+      - transcription
   /api/v1/transcription/{id}/speakers:
     get:
       description: Retrieves all custom speaker names for a transcription job
@@ -3164,12 +3382,13 @@ paths:
         required: true
         type: string
       produces:
-      - text/plain
+      - application/json
       responses:
         "200":
-          description: Log content
+          description: OK
           schema:
-            type: string
+            additionalProperties: true
+            type: object
         "404":
           description: Not Found
           schema:

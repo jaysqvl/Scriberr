@@ -61,6 +61,7 @@ type JobRepository interface {
 	ListExecutionsByJobID(ctx context.Context, jobID string) ([]models.TranscriptionJobExecution, error)
 	FindExecution(ctx context.Context, jobID, executionID string) (*models.TranscriptionJobExecution, error)
 	FindLatestExecution(ctx context.Context, jobID string) (*models.TranscriptionJobExecution, error)
+	SetPinnedExecution(ctx context.Context, jobID string, executionID *string) error
 	DeleteExecutionsByJobID(ctx context.Context, jobID string) error
 	DeleteMultiTrackFilesByJobID(ctx context.Context, jobID string) error
 	UpdateStatus(ctx context.Context, jobID string, status models.JobStatus) error
@@ -189,6 +190,12 @@ func (r *jobRepository) FindLatestExecution(ctx context.Context, jobID string) (
 	return &execution, nil
 }
 
+func (r *jobRepository) SetPinnedExecution(ctx context.Context, jobID string, executionID *string) error {
+	return r.db.WithContext(ctx).Model(&models.TranscriptionJob{}).
+		Where("id = ?", jobID).
+		Update("pinned_execution_id", executionID).Error
+}
+
 func (r *jobRepository) DeleteExecutionsByJobID(ctx context.Context, jobID string) error {
 	return r.db.WithContext(ctx).Where("transcription_job_id = ?", jobID).Delete(&models.TranscriptionJobExecution{}).Error
 }
@@ -209,7 +216,7 @@ func (r *jobRepository) FindLatestCompletedExecution(ctx context.Context, jobID 
 	var execution models.TranscriptionJobExecution
 	err := r.db.WithContext(ctx).
 		Where("transcription_job_id = ? AND status = ?", jobID, models.StatusCompleted).
-		Order("created_at DESC").
+		Order("completed_at DESC, created_at DESC").
 		First(&execution).Error
 	if err != nil {
 		return nil, err
