@@ -75,22 +75,33 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 
 # Install uv (fast Python package manager) directly to system PATH
-RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
-  && cp /root/.local/bin/uv /usr/local/bin/uv \
-  && chmod 755 /usr/local/bin/uv \
+ARG UV_VERSION=0.11.25
+ARG UV_SHA256=1db18b5e76fa645a7f3865773139bdec8e2d46adbdbb35e7410b34fa8015ccd2
+RUN curl -fL "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-x86_64-unknown-linux-gnu.tar.gz" -o /tmp/uv.tar.gz \
+  && echo "${UV_SHA256}  /tmp/uv.tar.gz" | sha256sum -c - \
+  && tar -xzf /tmp/uv.tar.gz -C /tmp \
+  && install -m 755 /tmp/uv-x86_64-unknown-linux-gnu/uv /usr/local/bin/uv \
+  && rm -rf /tmp/uv.tar.gz /tmp/uv-x86_64-unknown-linux-gnu \
   && uv --version
 
 # Install yt-dlp standalone binary
-RUN curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp \
+ARG YT_DLP_VERSION=2026.06.09
+ARG YT_DLP_SHA256=e5d57466682cfa9d61e9cf7c8a4f09b00f4a62af37d3bbdc4bcffdf63615feac
+RUN curl -fL "https://github.com/yt-dlp/yt-dlp/releases/download/${YT_DLP_VERSION}/yt-dlp" -o /usr/local/bin/yt-dlp \
+  && echo "${YT_DLP_SHA256}  /usr/local/bin/yt-dlp" | sha256sum -c - \
   && chmod a+rx /usr/local/bin/yt-dlp \
   && yt-dlp --version
 
 # Install Deno (JavaScript runtime required for yt-dlp YouTube downloads)
 # YouTube now requires JS execution for video cipher decryption
 # See: https://github.com/yt-dlp/yt-dlp/issues/14404
-RUN curl -fsSL https://deno.land/install.sh | sh \
-  && cp /root/.deno/bin/deno /usr/local/bin/deno \
+ARG DENO_VERSION=v2.9.0
+ARG DENO_SHA256=96c9c73fc05ea57603bc28d8071d41e861bd40bcf2a9f849dd5969ed1a2c8498
+RUN curl -fL "https://github.com/denoland/deno/releases/download/${DENO_VERSION}/deno-x86_64-unknown-linux-gnu.zip" -o /tmp/deno.zip \
+  && echo "${DENO_SHA256}  /tmp/deno.zip" | sha256sum -c - \
+  && unzip -q /tmp/deno.zip -d /usr/local/bin \
   && chmod 755 /usr/local/bin/deno \
+  && rm -f /tmp/deno.zip \
   && deno --version
 
 # Create default user (will be modified at runtime if needed)
