@@ -1,11 +1,9 @@
 package api
 
 import (
-	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
-	"text/template"
 
 	"github.com/gin-gonic/gin"
 )
@@ -65,14 +63,24 @@ func (h *Handler) DownloadCLIBinary(c *gin.Context) {
 	c.FileAttachment(filePath, filename)
 }
 
-const installScriptTemplate = `#!/bin/bash
+const installScript = `#!/bin/bash
 
-set -e
+set -euo pipefail
 
-SERVER_URL="{{.ServerURL}}"
-TOKEN="{{.Token}}"
+SERVER_URL="${1:-${SCRIBERR_SERVER_URL:-http://localhost:8080}}"
 INSTALL_DIR="/usr/local/bin"
 BINARY_NAME="scriberr"
+
+case "$SERVER_URL" in
+    http://*|https://*) ;;
+    *)
+        echo "Server URL must begin with http:// or https://"
+        exit 1
+        ;;
+esac
+
+TMP_BINARY="$(mktemp "${TMPDIR:-/tmp}/scriberr.XXXXXX")"
+trap 'rm -f "$TMP_BINARY"' EXIT
 
 # Detect OS and Arch
 OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
@@ -93,9 +101,9 @@ echo "Detected OS: $OS, Arch: $ARCH"
 DOWNLOAD_URL="$SERVER_URL/api/v1/cli/download?os=$OS&arch=$ARCH"
 
 echo "Downloading CLI from $DOWNLOAD_URL..."
-curl -sL "$DOWNLOAD_URL" -o "$BINARY_NAME"
+curl --fail --silent --show-error --location --output "$TMP_BINARY" -- "$DOWNLOAD_URL"
 
-chmod +x "$BINARY_NAME"
+chmod 0755 "$TMP_BINARY"
 
 # Handle macOS security protections
 if [ "$OS" == "darwin" ]; then
@@ -103,30 +111,23 @@ if [ "$OS" == "darwin" ]; then
     
     # 1. Remove quarantine attribute (Gatekeeper)
     echo "Removing quarantine attribute..."
-    xattr -d com.apple.quarantine "$BINARY_NAME" 2>/dev/null || echo "  (No quarantine attribute found or failed to remove)"
+    xattr -d com.apple.quarantine "$TMP_BINARY" 2>/dev/null || echo "  (No quarantine attribute found or failed to remove)"
 
     # 2. Ad-hoc sign the binary (Required for arm64)
     echo "Signing binary..."
-    codesign -s - -f "$BINARY_NAME" || echo "  (Code signing failed, but might not be strictly necessary if already signed)"
+    codesign -s - -f "$TMP_BINARY" || echo "  (Code signing failed, but might not be strictly necessary if already signed)"
 fi
 
 echo "Installing to $INSTALL_DIR..."
 if [ -w "$INSTALL_DIR" ]; then
-    mv "$BINARY_NAME" "$INSTALL_DIR/$BINARY_NAME"
+    install -m 0755 "$TMP_BINARY" "$INSTALL_DIR/$BINARY_NAME"
 else
-    sudo mv "$BINARY_NAME" "$INSTALL_DIR/$BINARY_NAME"
+    sudo install -m 0755 "$TMP_BINARY" "$INSTALL_DIR/$BINARY_NAME"
 fi
 
 echo "Successfully installed $BINARY_NAME to $INSTALL_DIR/$BINARY_NAME"
 
-# Configure if token provided
-if [ -n "$TOKEN" ]; then
-    echo "Configuring CLI with provided token..."
-    "$INSTALL_DIR/$BINARY_NAME" login --server "$SERVER_URL" --token-only "$TOKEN"
-    echo "Configuration saved."
-else
-    echo "Please run '$BINARY_NAME login' to authenticate."
-fi
+echo "Please run '$BINARY_NAME login --server $SERVER_URL' to authenticate."
 
 echo "Installation complete!"
 `
@@ -134,38 +135,7 @@ echo "Installation complete!"
 // GetInstallScript serves the installation script
 // GET /api/cli/install
 func (h *Handler) GetInstallScript(c *gin.Context) {
-	token := c.Query("token")
-
-	// Determine server URL from request if not configured
-	scheme := "http"
-	if c.Request.TLS != nil {
-		scheme = "https"
-	}
-	host := c.Request.Host
-
-	// If behind a proxy (common in prod), use X-Forwarded-Proto/Host
-	if proto := c.GetHeader("X-Forwarded-Proto"); proto != "" {
-		scheme = proto
-	}
-	if forwardedHost := c.GetHeader("X-Forwarded-Host"); forwardedHost != "" {
-		host = forwardedHost
-	}
-	serverURL := fmt.Sprintf("%s://%s", scheme, host)
-
-	tmpl, err := template.New("install").Parse(installScriptTemplate)
-	if err != nil {
-		c.String(http.StatusInternalServerError, "Failed to parse template")
-		return
-	}
-
-	data := struct {
-		ServerURL string
-		Token     string
-	}{
-		ServerURL: serverURL,
-		Token:     token,
-	}
-
 	c.Header("Content-Type", "text/x-shellscript")
-	_ = tmpl.Execute(c.Writer, data)
+	c.Header("Cache-Control", "public, max-age=300")
+	c.String(http.StatusOK, installScript)
 }

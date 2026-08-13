@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"scriberr/internal/processutil"
 	"scriberr/internal/transcription/interfaces"
 	"scriberr/pkg/logger"
 )
@@ -272,7 +273,7 @@ func (c *CanaryQwenAdapter) Transcribe(ctx context.Context, input interfaces.Aud
 		return nil, fmt.Errorf("failed to build command: %w", err)
 	}
 
-	cmd := exec.CommandContext(ctx, "uv", args...)
+	cmd := processutil.CommandContext(ctx, "uv", args...)
 	cmd.Env = append(os.Environ(),
 		"PYTHONUNBUFFERED=1",
 		"PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True")
@@ -286,7 +287,7 @@ func (c *CanaryQwenAdapter) Transcribe(ctx context.Context, input interfaces.Aud
 		cmd.Stderr = logFile
 	}
 
-	logger.Info("Executing Canary-Qwen command", "args", strings.Join(args, " "))
+	logger.Info("Executing Canary-Qwen command", "arg_count", len(args))
 
 	if err := cmd.Run(); err != nil {
 		if ctx.Err() == context.Canceled {

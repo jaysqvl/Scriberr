@@ -5,13 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"scriberr/internal/models"
+	"scriberr/internal/processutil"
 	"scriberr/internal/repository"
 	"scriberr/internal/sse"
 	"scriberr/internal/transcription/interfaces"
@@ -118,7 +118,7 @@ func (u *UnifiedTranscriptionService) ProcessJob(ctx context.Context, jobID stri
 	execution := &models.TranscriptionJobExecution{
 		TranscriptionJobID: jobID,
 		StartedAt:          startTime,
-		ActualParameters:   job.Parameters,
+		ActualParameters:   job.Parameters.WithoutSecrets(),
 		Status:             models.StatusProcessing,
 	}
 
@@ -238,7 +238,7 @@ func (u *UnifiedTranscriptionService) processSingleTrackJob(ctx context.Context,
 	}
 
 	// Create audio input
-	audioInput, err := u.createAudioInput(job.AudioPath)
+	audioInput, err := u.createAudioInput(ctx, job.AudioPath)
 	if err != nil {
 		return fmt.Errorf("failed to create audio input: %w", err)
 	}
@@ -462,7 +462,7 @@ type ffprobeOutput struct {
 }
 
 // createAudioInput creates an AudioInput from a file path with real metadata
-func (u *UnifiedTranscriptionService) createAudioInput(audioPath string) (interfaces.AudioInput, error) {
+func (u *UnifiedTranscriptionService) createAudioInput(ctx context.Context, audioPath string) (interfaces.AudioInput, error) {
 	// Get file info
 	fileInfo, err := os.Stat(audioPath)
 	if err != nil {
@@ -482,7 +482,7 @@ func (u *UnifiedTranscriptionService) createAudioInput(audioPath string) (interf
 	}
 
 	// Run ffprobe to get audio metadata
-	cmd := exec.Command("ffprobe",
+	cmd := processutil.CommandContext(ctx, "ffprobe",
 		"-v", "quiet",
 		"-print_format", "json",
 		"-show_format",

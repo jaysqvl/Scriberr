@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"scriberr/internal/processutil"
 	"scriberr/internal/transcription/interfaces"
 	"scriberr/pkg/logger"
 )
@@ -234,7 +235,7 @@ func (v *VoxtralAdapter) Transcribe(ctx context.Context, input interfaces.AudioI
 	}
 
 	// Execute Voxtral
-	cmd := exec.CommandContext(ctx, "uv", args...)
+	cmd := processutil.CommandContext(ctx, "uv", args...)
 	cmd.Env = append(os.Environ(), "PYTHONUNBUFFERED=1")
 
 	// Setup log file
@@ -247,7 +248,7 @@ func (v *VoxtralAdapter) Transcribe(ctx context.Context, input interfaces.AudioI
 		cmd.Stderr = logFile
 	}
 
-	logger.Info("Executing Voxtral command", "args", strings.Join(args, " "))
+	logger.Info("Executing Voxtral command", "arg_count", len(args))
 
 	if err := cmd.Run(); err != nil {
 		if ctx.Err() == context.Canceled {

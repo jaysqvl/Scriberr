@@ -4,11 +4,11 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 
+	"scriberr/internal/processutil"
 	"scriberr/internal/transcription/interfaces"
 	"scriberr/pkg/logger"
 )
@@ -111,7 +111,7 @@ func (a *AudioFormatPreprocessor) Process(ctx context.Context, input interfaces.
 	}
 
 	// Execute FFmpeg
-	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
+	cmd := processutil.CommandContext(ctx, "ffmpeg", args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		logger.Error("FFmpeg conversion failed", "output", string(output), "error", err)

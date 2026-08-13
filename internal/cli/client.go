@@ -14,6 +14,10 @@ import (
 	"time"
 )
 
+const maxCLIResponseBytes int64 = 1024 * 1024
+
+var uploadHTTPClient = &http.Client{Timeout: 5 * time.Minute}
+
 type resumableCreateResponse struct {
 	ID        string                  `json:"id"`
 	Status    string                  `json:"status"`
@@ -143,18 +147,18 @@ func getOrCreateCLIUploadSession(config *Config, filePath string, info os.FileIn
 	req.Header.Set("Content-Type", "application/json")
 	setCLIAuth(req, config)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := uploadHTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create upload session: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxCLIResponseBytes))
 		return nil, fmt.Errorf("failed to create upload session with status %d: %s", resp.StatusCode, string(respBody))
 	}
 
 	var created resumableCreateResponse
-	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxCLIResponseBytes)).Decode(&created); err != nil {
 		return nil, err
 	}
 	if created.Token == "" || created.ChunkSize <= 0 {
@@ -177,7 +181,7 @@ func fetchCLIUploadStatus(config *Config, sessionID string) (*resumableCreateRes
 		return nil, err
 	}
 	setCLIAuth(req, config)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := uploadHTTPClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -186,7 +190,7 @@ func fetchCLIUploadStatus(config *Config, sessionID string) (*resumableCreateRes
 		return nil, fmt.Errorf("upload status failed with status %d", resp.StatusCode)
 	}
 	var status resumableCreateResponse
-	return &status, json.NewDecoder(resp.Body).Decode(&status)
+	return &status, json.NewDecoder(io.LimitReader(resp.Body, maxCLIResponseBytes)).Decode(&status)
 }
 
 func uploadCLIChunk(config *Config, session *cachedUploadSession, index int, start, endExclusive, totalSize int64, chunk []byte) error {
@@ -207,9 +211,9 @@ func uploadCLIChunk(config *Config, session *cachedUploadSession, index int, sta
 		req.Header.Set("X-Chunk-SHA256", chunkHash)
 		req.ContentLength = int64(len(chunk))
 
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := uploadHTTPClient.Do(req)
 		if err == nil && resp != nil {
-			body, _ := io.ReadAll(resp.Body)
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, maxCLIResponseBytes))
 			_ = resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
 				return nil
@@ -230,13 +234,13 @@ func completeCLIUpload(config *Config, session *cachedUploadSession) error {
 	}
 	setCLIAuth(req, config)
 	req.Header.Set("X-Upload-Token", session.Token)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := uploadHTTPClient.Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxCLIResponseBytes))
 		return fmt.Errorf("complete upload failed with status %d: %s", resp.StatusCode, string(body))
 	}
 	return nil
@@ -262,6 +266,9 @@ func cliUploadCachePath() (string, error) {
 	}
 	path := filepath.Join(dir, "scriberr")
 	if err := os.MkdirAll(path, 0700); err != nil {
+		return "", err
+	}
+	if err := os.Chmod(path, 0700); err != nil {
 		return "", err
 	}
 	return filepath.Join(path, "upload-sessions.json"), nil
@@ -309,6 +316,9 @@ func readUploadSessionCache() (map[string]cachedUploadSession, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := os.Chmod(path, 0600); err != nil {
+		return nil, err
+	}
 	var cache map[string]cachedUploadSession
 	if err := json.Unmarshal(data, &cache); err != nil {
 		return map[string]cachedUploadSession{}, nil
@@ -325,5 +335,8 @@ func writeUploadSessionCache(cache map[string]cachedUploadSession) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0600)
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		return err
+	}
+	return os.Chmod(path, 0600)
 }

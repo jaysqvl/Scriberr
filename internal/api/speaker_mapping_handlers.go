@@ -100,7 +100,7 @@ func (h *Handler) UpdateSpeakerMappings(c *gin.Context) {
 	jobID := c.Param("id")
 
 	var req SpeakerMappingsUpdateRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := bindJSON(c, &req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request: " + err.Error()})
 		return
 	}

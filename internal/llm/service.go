@@ -2,6 +2,11 @@ package llm
 
 import "context"
 
+const (
+	maxProviderResponseBytes = 16 * 1024 * 1024
+	maxProviderStreamLine    = 1024 * 1024
+)
+
 // Service is a provider-agnostic LLM interface
 type Service interface {
 	GetModels(ctx context.Context) ([]string, error)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -20,7 +21,8 @@ import (
 // MockJobProcessor for testing
 type MockJobProcessor struct {
 	mock.Mock
-	processDelay time.Duration
+	processDelay  time.Duration
+	ignoreContext bool
 }
 
 func (m *MockJobProcessor) ProcessJob(ctx context.Context, jobID string) error {
@@ -37,10 +39,14 @@ func (m *MockJobProcessor) ProcessJobWithProcess(ctx context.Context, jobID stri
 
 	// Simulate processing time if delay is set
 	if m.processDelay > 0 {
-		select {
-		case <-time.After(m.processDelay):
-		case <-ctx.Done():
-			return ctx.Err()
+		if m.ignoreContext {
+			time.Sleep(m.processDelay)
+		} else {
+			select {
+			case <-time.After(m.processDelay):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
 		}
 	}
 
@@ -154,6 +160,24 @@ func (suite *QueueTestSuite) TestJobProcessingFailure() {
 	assert.NoError(suite.T(), err)
 	assert.Equal(suite.T(), models.StatusFailed, updatedJob.Status)
 	assert.NotNil(suite.T(), updatedJob.ErrorMessage)
+}
+
+func (suite *QueueTestSuite) TestJobTimeoutWinsWhenProcessorReturnsNil() {
+	job := suite.helper.CreateTestTranscriptionJob(suite.T(), "Test Job Timeout")
+	mockProcessor := &MockJobProcessor{processDelay: 50 * time.Millisecond, ignoreContext: true}
+	mockProcessor.On("ProcessJobWithProcess", mock.Anything, job.ID).Return(nil)
+
+	tq := queue.NewTaskQueue(1, mockProcessor, suite.jobRepo)
+	tq.SetJobTimeout(10 * time.Millisecond)
+	tq.Start()
+	defer tq.Stop()
+
+	assert.NoError(suite.T(), tq.EnqueueJob(job.ID))
+	assert.Eventually(suite.T(), func() bool {
+		updatedJob, err := tq.GetJobStatus(job.ID)
+		return err == nil && updatedJob.Status == models.StatusFailed &&
+			updatedJob.ErrorMessage != nil && strings.Contains(*updatedJob.ErrorMessage, "timeout")
+	}, 2*time.Second, 20*time.Millisecond)
 }
 
 // Test job cancellation

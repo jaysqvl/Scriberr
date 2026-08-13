@@ -522,7 +522,7 @@ func TestAudioInputCreation(t *testing.T) {
 	audioPath := "/tmp/test.wav"
 
 	// This will fail since the file doesn't exist, but we can test the structure
-	_, err := service.createAudioInput(audioPath)
+	_, err := service.createAudioInput(context.Background(), audioPath)
 	if err == nil {
 		t.Error("Expected error for non-existent file")
 	}

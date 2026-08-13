@@ -3,7 +3,6 @@ import { Send, User, MessageCircle, Copy, Check, Sparkles, Brain, ChevronDown } 
 import ReactMarkdown from 'react-markdown'
 import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
-import rehypeRaw from 'rehype-raw'
 import rehypeHighlight from 'rehype-highlight'
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
@@ -585,7 +584,7 @@ export const ChatInterface = memo(function ChatInterface({ transcriptionId, acti
                                           <ReactMarkdown
                                             remarkPlugins={[remarkMath]}
                                             // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                                            rehypePlugins={[rehypeRaw as any, rehypeKatex as any, rehypeHighlight as any]}
+                                            rehypePlugins={[rehypeKatex as any, rehypeHighlight as any]}
                                             // eslint-disable-next-line @typescript-eslint/no-explicit-any
                                             components={{ pre: PreBlock as any }}
                                           >
@@ -603,7 +602,7 @@ export const ChatInterface = memo(function ChatInterface({ transcriptionId, acti
                                           <ReactMarkdown
                                             remarkPlugins={[remarkMath]}
                                             // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                                            rehypePlugins={[rehypeRaw as any, rehypeKatex as any, rehypeHighlight as any]}
+                                            rehypePlugins={[rehypeKatex as any, rehypeHighlight as any]}
                                             // eslint-disable-next-line @typescript-eslint/no-explicit-any
                                             components={{ pre: PreBlock as any }}
                                           >

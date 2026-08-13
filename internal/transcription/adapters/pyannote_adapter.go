@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"scriberr/internal/processutil"
 	"scriberr/internal/transcription/interfaces"
 	"scriberr/pkg/logger"
 )
@@ -315,8 +316,9 @@ func (p *PyAnnoteAdapter) Diarize(ctx context.Context, input interfaces.AudioInp
 	}
 
 	// Execute PyAnnote
-	cmd := exec.CommandContext(ctx, "uv", args...)
+	cmd := processutil.CommandContext(ctx, "uv", args...)
 	cmd.Env = append(os.Environ(), "PYTHONUNBUFFERED=1")
+	cmd.Env = withEnvironmentValue(cmd.Env, "HF_TOKEN", hfToken)
 
 	// Setup log file
 	logFile, err := os.OpenFile(filepath.Join(procCtx.OutputDirectory, "transcription.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
@@ -328,7 +330,7 @@ func (p *PyAnnoteAdapter) Diarize(ctx context.Context, input interfaces.AudioInp
 		cmd.Stderr = logFile
 	}
 
-	logger.Info("Executing PyAnnote command", "args", strings.Join(args, " "))
+	logger.Info("Executing PyAnnote command", "arg_count", len(args))
 
 	if err := cmd.Run(); err != nil {
 		if ctx.Err() == context.Canceled {
@@ -379,7 +381,6 @@ func (p *PyAnnoteAdapter) buildPyAnnoteArgs(input interfaces.AudioInput, params 
 		"run", "--system-certs", "--project", p.envPath, "python", scriptPath,
 		input.FilePath,
 		"--output", outputFile,
-		"--hf-token", p.GetStringParameter(params, "hf_token"),
 	}
 
 	// Add model

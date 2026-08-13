@@ -2,6 +2,7 @@ package transcription
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -14,6 +15,11 @@ import (
 	"scriberr/internal/repository"
 
 	"github.com/google/uuid"
+)
+
+var (
+	ErrQuickCapacity       = errors.New("quick transcription capacity is full")
+	ErrQuickUploadTooLarge = errors.New("quick transcription upload is too large")
 )
 
 // QuickTranscriptionJob represents a temporary transcription job
@@ -38,6 +44,9 @@ type QuickTranscriptionService struct {
 	tempDir          string
 	cleanupTicker    *time.Ticker
 	stopCleanup      chan bool
+	jobSlots         chan struct{}
+	maxUploadBytes   int64
+	processTimeout   time.Duration
 }
 
 // NewQuickTranscriptionService creates a new quick transcription service
@@ -48,6 +57,19 @@ func NewQuickTranscriptionService(cfg *config.Config, unifiedProcessor *UnifiedJ
 		return nil, fmt.Errorf("failed to create temp directory: %v", err)
 	}
 
+	concurrency := cfg.MaxConcurrentMedia
+	if concurrency <= 0 {
+		concurrency = 2
+	}
+	maxUploadBytes := cfg.MaxUploadBytes
+	if maxUploadBytes <= 0 {
+		maxUploadBytes = 20 * 1024 * 1024 * 1024
+	}
+	processTimeout := 2 * time.Hour
+	if cfg.MediaTimeoutMinutes > 0 {
+		processTimeout = time.Duration(cfg.MediaTimeoutMinutes) * time.Minute
+	}
+
 	service := &QuickTranscriptionService{
 		config:           cfg,
 		unifiedProcessor: unifiedProcessor,
@@ -55,6 +77,9 @@ func NewQuickTranscriptionService(cfg *config.Config, unifiedProcessor *UnifiedJ
 		jobs:             make(map[string]*QuickTranscriptionJob),
 		tempDir:          tempDir,
 		stopCleanup:      make(chan bool),
+		jobSlots:         make(chan struct{}, concurrency),
+		maxUploadBytes:   maxUploadBytes,
+		processTimeout:   processTimeout,
 	}
 
 	// Start cleanup routine (run every hour)
@@ -63,8 +88,28 @@ func NewQuickTranscriptionService(cfg *config.Config, unifiedProcessor *UnifiedJ
 	return service, nil
 }
 
+// UseSharedMediaSlots makes quick jobs share the server's download and
+// conversion capacity. It must be called before accepting submissions.
+func (qs *QuickTranscriptionService) UseSharedMediaSlots(slots chan struct{}) {
+	if slots != nil {
+		qs.jobSlots = slots
+	}
+}
+
 // SubmitQuickJob creates and processes a temporary transcription job
 func (qs *QuickTranscriptionService) SubmitQuickJob(audioData io.Reader, filename string, params models.WhisperXParams) (*QuickTranscriptionJob, error) {
+	select {
+	case qs.jobSlots <- struct{}{}:
+	default:
+		return nil, ErrQuickCapacity
+	}
+	releaseSlot := true
+	defer func() {
+		if releaseSlot {
+			<-qs.jobSlots
+		}
+	}()
+
 	// Generate unique job ID
 	jobID := uuid.New().String()
 
@@ -74,15 +119,25 @@ func (qs *QuickTranscriptionService) SubmitQuickJob(audioData io.Reader, filenam
 	audioPath := filepath.Join(qs.tempDir, audioFilename)
 
 	// Save audio file
-	audioFile, err := os.Create(audioPath)
+	audioFile, err := os.OpenFile(audioPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create audio file: %v", err)
 	}
-	defer audioFile.Close()
 
-	if _, err := io.Copy(audioFile, audioData); err != nil {
-		os.Remove(audioPath)
+	written, err := io.Copy(audioFile, io.LimitReader(audioData, qs.maxUploadBytes+1))
+	if err != nil {
+		_ = audioFile.Close()
+		_ = os.Remove(audioPath)
 		return nil, fmt.Errorf("failed to save audio file: %v", err)
+	}
+	if written > qs.maxUploadBytes {
+		_ = audioFile.Close()
+		_ = os.Remove(audioPath)
+		return nil, ErrQuickUploadTooLarge
+	}
+	if err := audioFile.Close(); err != nil {
+		_ = os.Remove(audioPath)
+		return nil, fmt.Errorf("failed to finalize audio file: %v", err)
 	}
 
 	// Create quick transcription job
@@ -102,9 +157,11 @@ func (qs *QuickTranscriptionService) SubmitQuickJob(audioData io.Reader, filenam
 	qs.jobsMutex.Unlock()
 
 	// Start processing in background
+	response := cloneQuickJob(job)
+	releaseSlot = false
 	go qs.processQuickJob(jobID)
 
-	return job, nil
+	return response, nil
 }
 
 // GetQuickJob retrieves a quick transcription job by ID
@@ -122,11 +179,12 @@ func (qs *QuickTranscriptionService) GetQuickJob(jobID string) (*QuickTranscript
 		return nil, fmt.Errorf("job expired")
 	}
 
-	return job, nil
+	return cloneQuickJob(job), nil
 }
 
 // processQuickJob processes a quick transcription job
 func (qs *QuickTranscriptionService) processQuickJob(jobID string) {
+	defer func() { <-qs.jobSlots }()
 	// Update job status to processing
 	qs.jobsMutex.Lock()
 	job, exists := qs.jobs[jobID]
@@ -158,7 +216,8 @@ func (qs *QuickTranscriptionService) processQuickJob(jobID string) {
 	}
 
 	// Create a temporary database entry for unified processing
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), qs.processTimeout)
+	defer cancel()
 
 	// Save temporary job to database for processing
 	if err := qs.jobRepo.Create(ctx, &tempJob); err != nil {
@@ -174,21 +233,27 @@ func (qs *QuickTranscriptionService) processQuickJob(jobID string) {
 
 	// Process with unified service
 	err := qs.unifiedProcessor.ProcessJob(ctx, jobID)
+	if err == nil {
+		err = ctx.Err()
+	}
+
+	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cleanupCancel()
 
 	// Load the processed result back
-	if processedJob, loadErr := qs.jobRepo.FindByID(ctx, jobID); loadErr == nil {
+	if processedJob, loadErr := qs.jobRepo.FindByID(cleanupCtx, jobID); loadErr == nil {
 		// Copy result back to quick job if successful
 		if err == nil {
 			if processedJob.Transcript != nil {
 				// Save transcript to temp file for loadTranscriptFromTemp
 				transcriptPath := filepath.Join(qs.tempDir, jobID+"_transcript.json")
-				_ = os.WriteFile(transcriptPath, []byte(*processedJob.Transcript), 0644)
+				_ = os.WriteFile(transcriptPath, []byte(*processedJob.Transcript), 0600)
 			}
 		}
 	}
 
 	// Clean up temporary database entry
-	_ = qs.jobRepo.Delete(ctx, jobID)
+	_ = qs.jobRepo.Delete(cleanupCtx, jobID)
 
 	// Update job with results
 	qs.jobsMutex.Lock()
@@ -207,6 +272,22 @@ func (qs *QuickTranscriptionService) processQuickJob(jobID string) {
 			}
 		}
 	}
+}
+
+func cloneQuickJob(job *QuickTranscriptionJob) *QuickTranscriptionJob {
+	if job == nil {
+		return nil
+	}
+	clone := *job
+	if job.Transcript != nil {
+		transcript := *job.Transcript
+		clone.Transcript = &transcript
+	}
+	if job.ErrorMessage != nil {
+		errorMessage := *job.ErrorMessage
+		clone.ErrorMessage = &errorMessage
+	}
+	return &clone
 }
 
 // processWithWhisperX processes the job using WhisperX service

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"scriberr/internal/processutil"
 	"scriberr/internal/transcription/interfaces"
 	"scriberr/pkg/downloader"
 	"scriberr/pkg/logger"
@@ -325,7 +326,7 @@ func (p *ParakeetAdapter) Transcribe(ctx context.Context, input interfaces.Audio
 	audioDuration := input.Duration
 	if audioDuration == 0 {
 		// Duration not provided, try to detect it
-		durationSecs, err := p.detectAudioDuration(audioInput.FilePath)
+		durationSecs, err := p.detectAudioDuration(ctx, audioInput.FilePath)
 		if err != nil {
 			logger.Warn("Failed to detect audio duration, using standard transcription", "error", err)
 			audioDuration = 0
@@ -368,8 +369,8 @@ func (p *ParakeetAdapter) Transcribe(ctx context.Context, input interfaces.Audio
 }
 
 // detectAudioDuration uses ffprobe to detect audio duration
-func (p *ParakeetAdapter) detectAudioDuration(audioPath string) (float64, error) {
-	cmd := exec.Command("ffprobe",
+func (p *ParakeetAdapter) detectAudioDuration(ctx context.Context, audioPath string) (float64, error) {
+	cmd := processutil.CommandContext(ctx, "ffprobe",
 		"-v", "error",
 		"-show_entries", "format=duration",
 		"-of", "default=noprint_wrappers=1:nokey=1",
@@ -398,7 +399,7 @@ func (p *ParakeetAdapter) transcribeStandard(ctx context.Context, input interfac
 	}
 
 	// Execute Parakeet
-	cmd := exec.CommandContext(ctx, "uv", args...)
+	cmd := processutil.CommandContext(ctx, "uv", args...)
 	cmd.Env = append(os.Environ(),
 		"PYTHONUNBUFFERED=1",
 		"PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True")
@@ -413,7 +414,7 @@ func (p *ParakeetAdapter) transcribeStandard(ctx context.Context, input interfac
 		cmd.Stderr = logFile
 	}
 
-	logger.Info("Executing Parakeet command", "args", strings.Join(args, " "))
+	logger.Info("Executing Parakeet command", "arg_count", len(args))
 
 	if err := cmd.Run(); err != nil {
 		if ctx.Err() == context.Canceled {
@@ -449,7 +450,7 @@ func (p *ParakeetAdapter) transcribeBuffered(ctx context.Context, input interfac
 	}
 
 	// Execute buffered inference
-	cmd := exec.CommandContext(ctx, "uv", args...)
+	cmd := processutil.CommandContext(ctx, "uv", args...)
 	cmd.Env = append(os.Environ(),
 		"PYTHONUNBUFFERED=1",
 		"PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True")
@@ -464,7 +465,7 @@ func (p *ParakeetAdapter) transcribeBuffered(ctx context.Context, input interfac
 		cmd.Stderr = logFile
 	}
 
-	logger.Info("Executing Parakeet buffered inference", "args", strings.Join(args, " "))
+	logger.Info("Executing Parakeet buffered inference", "arg_count", len(args))
 
 	if err := cmd.Run(); err != nil {
 		if ctx.Err() == context.Canceled {

@@ -15,7 +15,6 @@ import (
 
 func TestSendWebhook(t *testing.T) {
 	// Setup
-	service := NewService()
 	ctx := context.Background()
 
 	t.Run("Success", func(t *testing.T) {
@@ -34,6 +33,7 @@ func TestSendWebhook(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 		}))
 		defer server.Close()
+		service := newServiceWithClient(server.Client())
 
 		// Test payload
 		payload := WebhookPayload{
@@ -62,6 +62,7 @@ func TestSendWebhook(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 		}))
 		defer server.Close()
+		service := newServiceWithClient(server.Client())
 
 		payload := WebhookPayload{
 			JobID:  "job-retry",
@@ -82,6 +83,7 @@ func TestSendWebhook(t *testing.T) {
 			w.WriteHeader(http.StatusInternalServerError)
 		}))
 		defer server.Close()
+		service := newServiceWithClient(server.Client())
 
 		payload := WebhookPayload{
 			JobID: "job-fail",
@@ -96,7 +98,21 @@ func TestSendWebhook(t *testing.T) {
 	})
 
 	t.Run("EmptyURL", func(t *testing.T) {
+		service := NewService()
 		err := service.SendWebhook(ctx, "", WebhookPayload{})
 		assert.NoError(t, err)
+	})
+
+	t.Run("RejectsProtectedDestinations", func(t *testing.T) {
+		service := NewService()
+		for _, destination := range []string{
+			"http://127.0.0.1:8080/hook",
+			"https://169.254.169.254/latest/meta-data",
+			"https://[::1]/hook",
+		} {
+			err := service.SendWebhook(ctx, destination, WebhookPayload{})
+			assert.Error(t, err)
+			assert.Contains(t, err.Error(), "destination rejected")
+		}
 	})
 }

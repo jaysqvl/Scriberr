@@ -29,8 +29,18 @@ export function YouTubeDownloadDialog({
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
 
-  const validateYouTubeUrl = (url: string): boolean => {
-    return url.includes('youtube.com') || url.includes('youtu.be');
+  const validateYouTubeUrl = (value: string): boolean => {
+    try {
+      const parsed = new URL(value.trim());
+      if (parsed.protocol !== "https:" || parsed.username || parsed.password) {
+        return false;
+      }
+
+      const hostname = parsed.hostname.toLowerCase().replace(/\.$/, "");
+      return hostname === "youtu.be" || hostname === "youtube.com" || hostname.endsWith(".youtube.com");
+    } catch {
+      return false;
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {

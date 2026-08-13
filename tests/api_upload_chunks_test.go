@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -207,6 +208,51 @@ func (suite *APIHandlerTestSuite) TestResumableUploadRejectsHugeChunkPlan() {
 	w := suite.makeAuthenticatedRequest("POST", "/api/v1/transcription/uploads", body, false)
 	assert.Equal(suite.T(), http.StatusBadRequest, w.Code)
 	assert.Contains(suite.T(), w.Body.String(), "too many chunks")
+}
+
+func (suite *APIHandlerTestSuite) TestUploadPoliciesRejectOversizedAndExcessActiveSessions() {
+	oldMaxBytes := suite.helper.Config.MaxUploadBytes
+	oldMaxActive := suite.helper.Config.MaxActiveUploads
+	suite.helper.Config.MaxUploadBytes = 8
+	suite.helper.Config.MaxActiveUploads = 1
+	defer func() {
+		suite.helper.Config.MaxUploadBytes = oldMaxBytes
+		suite.helper.Config.MaxActiveUploads = oldMaxActive
+	}()
+
+	tooLarge := map[string]interface{}{
+		"kind": "audio",
+		"files": []map[string]interface{}{{
+			"id": "audio", "role": "audio", "name": "large.mp3", "size": 9,
+		}},
+	}
+	w := suite.makeAuthenticatedRequest("POST", "/api/v1/transcription/uploads", tooLarge, false)
+	assert.Equal(suite.T(), http.StatusBadRequest, w.Code)
+	assert.Contains(suite.T(), w.Body.String(), "size limit")
+
+	_ = suite.createAudioUploadSession([]byte("12345678"), "first.mp3")
+	second := map[string]interface{}{
+		"kind": "audio",
+		"files": []map[string]interface{}{{
+			"id": "audio", "role": "audio", "name": "second.mp3", "size": 8,
+		}},
+	}
+	w = suite.makeAuthenticatedRequest("POST", "/api/v1/transcription/uploads", second, false)
+	assert.Equal(suite.T(), http.StatusTooManyRequests, w.Code)
+
+	body := &bytes.Buffer{}
+	writer := multipart.NewWriter(body)
+	part, err := writer.CreateFormFile("audio", "oversized.mp3")
+	require.NoError(suite.T(), err)
+	_, err = part.Write([]byte("123456789"))
+	require.NoError(suite.T(), err)
+	require.NoError(suite.T(), writer.Close())
+	req, _ := http.NewRequest("POST", "/api/v1/transcription/upload", body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("X-API-Key", suite.helper.TestAPIKey)
+	w = httptest.NewRecorder()
+	suite.router.ServeHTTP(w, req)
+	assert.Equal(suite.T(), http.StatusRequestEntityTooLarge, w.Code)
 }
 
 func (suite *APIHandlerTestSuite) TestResumableUploadCreateCleansExpiredSessions() {

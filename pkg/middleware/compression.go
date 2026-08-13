@@ -120,7 +120,7 @@ func CompressionMiddlewareWithLevel(level int) gin.HandlerFunc {
 		// Wrap response writer
 		c.Writer = &gzipWriter{
 			ResponseWriter: c.Writer,
-			gw:            gz,
+			gw:             gz,
 		}
 
 		c.Next()

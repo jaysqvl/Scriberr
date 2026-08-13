@@ -37,7 +37,7 @@ type SummarizeRequest struct {
 // @Router /api/v1/summarize [post]
 func (h *Handler) Summarize(c *gin.Context) {
 	var req SummarizeRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := bindJSON(c, &req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}

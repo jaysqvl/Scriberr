@@ -131,6 +131,7 @@ func main() {
 	// Initialize task queue
 	logger.Startup("queue", "Starting background processing")
 	taskQueue := queue.NewTaskQueue(2, unifiedProcessor, jobRepo) // 2 workers
+	taskQueue.SetJobTimeout(time.Duration(cfg.MediaTimeoutMinutes) * time.Minute)
 	taskQueue.Start()
 	defer taskQueue.Stop()
 
@@ -165,8 +166,12 @@ func main() {
 
 	// Create server
 	srv := &http.Server{
-		Addr:    cfg.Host + ":" + cfg.Port,
-		Handler: router,
+		Addr:              cfg.Host + ":" + cfg.Port,
+		Handler:           router,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       2 * time.Hour,
+		IdleTimeout:       2 * time.Minute,
+		MaxHeaderBytes:    1 << 20,
 	}
 
 	// Start server in a goroutine

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"scriberr/internal/processutil"
 	"scriberr/internal/transcription/interfaces"
 	"scriberr/pkg/downloader"
 	"scriberr/pkg/logger"
@@ -377,7 +378,7 @@ func (c *CanaryAdapter) Transcribe(ctx context.Context, input interfaces.AudioIn
 	}
 
 	// Execute Canary
-	cmd := exec.CommandContext(ctx, "uv", args...)
+	cmd := processutil.CommandContext(ctx, "uv", args...)
 	cmd.Env = append(os.Environ(),
 		"PYTHONUNBUFFERED=1",
 		"PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True")
@@ -392,7 +393,7 @@ func (c *CanaryAdapter) Transcribe(ctx context.Context, input interfaces.AudioIn
 		cmd.Stderr = logFile
 	}
 
-	logger.Info("Executing Canary command", "args", strings.Join(args, " "))
+	logger.Info("Executing Canary command", "arg_count", len(args))
 
 	if err := cmd.Run(); err != nil {
 		if ctx.Err() == context.Canceled {

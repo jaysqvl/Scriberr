@@ -52,7 +52,7 @@ func (h *Handler) preserveCurrentRunSnapshot(ctx context.Context, job *models.Tr
 		TranscriptionJobID: job.ID,
 		StartedAt:          job.CreatedAt,
 		CompletedAt:        &completedAt,
-		ActualParameters:   job.Parameters,
+		ActualParameters:   job.Parameters.WithoutSecrets(),
 		Status:             models.StatusCompleted,
 		Transcript:         job.Transcript,
 		LogPath:            logPath,

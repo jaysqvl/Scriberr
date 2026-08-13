@@ -41,11 +41,11 @@ archives:
   - id: default
     format_overrides:
       - goos: windows
-        format: zip
+        formats: [zip]
       - goos: linux
-        format: tar.gz
+        formats: [tar.gz]
       - goos: darwin
-        format: tar.gz
+        formats: [tar.gz]
     name_template: >-
       {{ .ProjectName }}_
       {{- title .Os }}_

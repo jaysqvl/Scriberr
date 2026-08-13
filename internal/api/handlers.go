@@ -1,15 +1,16 @@
 package api
 
 import (
-	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -17,8 +18,11 @@ import (
 
 	"scriberr/internal/auth"
 	"scriberr/internal/config"
+	"scriberr/internal/database"
 	"scriberr/internal/models"
+	"scriberr/internal/netpolicy"
 	"scriberr/internal/processing"
+	"scriberr/internal/processutil"
 	"scriberr/internal/queue"
 	"scriberr/internal/repository"
 	"scriberr/internal/service"
@@ -30,6 +34,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // Handler contains all the API handlers
@@ -54,6 +59,9 @@ type Handler struct {
 	quickTranscription  *transcription.QuickTranscriptionService
 	multiTrackProcessor *processing.MultiTrackProcessor
 	broadcaster         *sse.Broadcaster
+	cliAuthStore        *cliAuthorizationStore
+	outboundHTTPClient  *http.Client
+	resourceAdmission   *resourceAdmission
 }
 
 // NewHandler creates a new handler
@@ -78,6 +86,11 @@ func NewHandler(
 	multiTrackProcessor *processing.MultiTrackProcessor,
 	broadcaster *sse.Broadcaster,
 ) *Handler {
+	resourceAdmission := newResourceAdmission(cfg)
+	if quickTranscription != nil {
+		quickTranscription.UseSharedMediaSlots(resourceAdmission.mediaSlots)
+	}
+
 	return &Handler{
 		config:              cfg,
 		authService:         authService,
@@ -99,6 +112,17 @@ func NewHandler(
 		quickTranscription:  quickTranscription,
 		multiTrackProcessor: multiTrackProcessor,
 		broadcaster:         broadcaster,
+		cliAuthStore:        newCLIAuthorizationStore(),
+		outboundHTTPClient:  netpolicy.NewPublicHTTPClient(5 * time.Minute),
+		resourceAdmission:   resourceAdmission,
+	}
+}
+
+// SetOutboundHTTPClient replaces the custom-provider client for an embedding
+// or test harness. The standalone server always uses the hardened default.
+func (h *Handler) SetOutboundHTTPClient(client *http.Client) {
+	if client != nil {
+		h.outboundHTTPClient = client
 	}
 }
 
@@ -111,8 +135,8 @@ type SubmitJobRequest struct {
 
 // LoginRequest represents the login request
 type LoginRequest struct {
-	Username string `json:"username" binding:"required"`
-	Password string `json:"password" binding:"required"`
+	Username string `json:"username" binding:"required,min=1,max=50"`
+	Password string `json:"password" binding:"required,max=1024"`
 }
 
 // LoginResponse represents the login response
@@ -127,8 +151,8 @@ type LoginResponse struct {
 // RegisterRequest represents the registration request
 type RegisterRequest struct {
 	Username        string `json:"username" binding:"required,min=3,max=50"`
-	Password        string `json:"password" binding:"required,min=6"`
-	ConfirmPassword string `json:"confirmPassword" binding:"required"`
+	Password        string `json:"password" binding:"required,min=6,max=1024"`
+	ConfirmPassword string `json:"confirmPassword" binding:"required,max=1024"`
 }
 
 // RegistrationStatusResponse represents the registration status
@@ -139,15 +163,15 @@ type RegistrationStatusResponse struct {
 
 // ChangePasswordRequest represents the change password request
 type ChangePasswordRequest struct {
-	CurrentPassword string `json:"currentPassword" binding:"required"`
-	NewPassword     string `json:"newPassword" binding:"required,min=6"`
-	ConfirmPassword string `json:"confirmPassword" binding:"required"`
+	CurrentPassword string `json:"currentPassword" binding:"required,max=1024"`
+	NewPassword     string `json:"newPassword" binding:"required,min=6,max=1024"`
+	ConfirmPassword string `json:"confirmPassword" binding:"required,max=1024"`
 }
 
 // ChangeUsernameRequest represents the change username request
 type ChangeUsernameRequest struct {
 	NewUsername string `json:"newUsername" binding:"required,min=3,max=50"`
-	Password    string `json:"password" binding:"required"`
+	Password    string `json:"password" binding:"required,max=1024"`
 }
 
 // CreateAPIKeyRequest represents the create API key request
@@ -166,8 +190,8 @@ type CreateAPIKeyResponse struct {
 
 // YouTubeDownloadRequest represents the YouTube download request
 type YouTubeDownloadRequest struct {
-	URL   string  `json:"url" binding:"required"`
-	Title *string `json:"title,omitempty"`
+	URL   string  `json:"url" binding:"required,max=2048"`
+	Title *string `json:"title,omitempty" binding:"omitempty,max=500"`
 }
 
 // YouTubeDownloadResponse represents the YouTube download response
@@ -262,11 +286,19 @@ func transformAPIKeyForList(apiKey models.APIKey) APIKeyListResponse {
 // @Security ApiKeyAuth
 // @Security BearerAuth
 func (h *Handler) UploadAudio(c *gin.Context) {
+	release, ok := h.beginMultipartUpload(c, h.config.UploadDir)
+	if !ok {
+		return
+	}
+	defer release()
 	// Note: This endpoint is also used by the CLI watcher to upload files.
 	// The CLI authenticates using a long-lived JWT token.
 	header, err := c.FormFile(paramAudio)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Audio file is required"})
+		return
+	}
+	if !h.acceptUploadSize(c, h.config.UploadDir, header.Size) {
 		return
 	}
 
@@ -299,9 +331,17 @@ func (h *Handler) UploadAudio(c *gin.Context) {
 // @Security ApiKeyAuth
 // @Security BearerAuth
 func (h *Handler) UploadVideo(c *gin.Context) {
+	release, ok := h.beginMultipartUpload(c, h.config.UploadDir)
+	if !ok {
+		return
+	}
+	defer release()
 	header, err := c.FormFile("video")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Video file is required"})
+		return
+	}
+	if !h.acceptUploadSize(c, h.config.UploadDir, header.Size) {
 		return
 	}
 
@@ -334,6 +374,11 @@ func (h *Handler) UploadVideo(c *gin.Context) {
 // @Security ApiKeyAuth
 // @Security BearerAuth
 func (h *Handler) UploadMultiTrack(c *gin.Context) {
+	release, ok := h.beginMultipartUpload(c, h.config.TempDir)
+	if !ok {
+		return
+	}
+	defer release()
 	form, err := c.MultipartForm()
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to parse multipart form"})
@@ -351,6 +396,13 @@ func (h *Handler) UploadMultiTrack(c *gin.Context) {
 	aupFiles := form.File["aup"]
 	if len(aupFiles) != 1 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Exactly one .aup file is required"})
+		return
+	}
+	totalSize := aupFiles[0].Size
+	for _, file := range files {
+		totalSize += file.Size
+	}
+	if !h.acceptUploadSize(c, h.config.TempDir, totalSize) {
 		return
 	}
 
@@ -543,10 +595,18 @@ func (h *Handler) GetTrackProgress(c *gin.Context) {
 // @Security ApiKeyAuth
 // @Security BearerAuth
 func (h *Handler) SubmitJob(c *gin.Context) {
+	release, ok := h.beginMultipartUpload(c, h.config.UploadDir)
+	if !ok {
+		return
+	}
+	defer release()
 	// Parse multipart form
 	header, err := c.FormFile(paramAudio)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Audio file is required"})
+		return
+	}
+	if !h.acceptUploadSize(c, h.config.UploadDir, header.Size) {
 		return
 	}
 
@@ -914,7 +974,7 @@ func (h *Handler) getValidatedTranscriptionParams(c *gin.Context, job *models.Tr
 	}
 
 	// Parse request body parameters, overriding defaults
-	if err := c.ShouldBindJSON(&requestParams); err != nil {
+	if err := bindJSON(c, &requestParams); err != nil {
 		// Use defaults if JSON parsing fails
 		logger.Debug("Failed to parse JSON parameters, using defaults", "error", err)
 	}
@@ -1024,7 +1084,7 @@ func (h *Handler) UpdateTranscriptionTitle(c *gin.Context) {
 	var body struct {
 		Title string `json:"title" binding:"required,min=1,max=255"`
 	}
-	if err := c.ShouldBindJSON(&body); err != nil {
+	if err := bindJSON(c, &body); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -1356,8 +1416,8 @@ func (h *Handler) GetAudioFile(c *gin.Context) {
 // @Router /api/v1/auth/login [post]
 func (h *Handler) Login(c *gin.Context) {
 	var req LoginRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
+	if err := bindLimitedJSON(c, &req, maxAuthBodyBytes); err != nil {
+		c.JSON(requestBodyErrorStatus(err), gin.H{"error": "Invalid request"})
 		return
 	}
 
@@ -1443,10 +1503,23 @@ func (h *Handler) writeLoginRateLimit(c *gin.Context, username, clientIP string,
 // @Security BearerAuth
 // @Router /api/v1/auth/logout [post]
 func (h *Handler) Logout(c *gin.Context) {
-	// Best-effort refresh token revocation and cookie clear
+	revocationFailed := false
+	if rawToken := accessTokenFromRequest(c); rawToken != "" {
+		if claims, err := h.authService.ValidateToken(rawToken); err == nil && claims.ExpiresAt != nil {
+			revoked := models.RevokedAccessToken{
+				TokenHash: sha256Hex(rawToken),
+				ExpiresAt: claims.ExpiresAt.Time,
+			}
+			if database.DB == nil || database.DB.Clauses(clause.OnConflict{DoNothing: true}).Create(&revoked).Error != nil {
+				revocationFailed = true
+			}
+		}
+	}
+	// Revoke the refresh token and clear both browser credentials.
 	if cookie, err := c.Cookie("scriberr_refresh_token"); err == nil {
-		h.revokeRefreshToken(c, cookie)
-
+		if err := h.revokeRefreshToken(c, cookie); err != nil {
+			revocationFailed = true
+		}
 	}
 	http.SetCookie(c.Writer, &http.Cookie{
 		Name:     "scriberr_refresh_token",
@@ -1469,7 +1542,22 @@ func (h *Handler) Logout(c *gin.Context) {
 		SameSite: http.SameSiteLaxMode,
 		Secure:   h.config.SecureCookies,
 	})
+	if revocationFailed {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to revoke session"})
+		return
+	}
 	c.JSON(http.StatusOK, gin.H{"message": "Logged out successfully"})
+}
+
+func accessTokenFromRequest(c *gin.Context) string {
+	parts := strings.SplitN(c.GetHeader("Authorization"), " ", 2)
+	if len(parts) == 2 && parts[0] == "Bearer" {
+		return parts[1]
+	}
+	if cookie, err := c.Cookie("scriberr_access_token"); err == nil {
+		return cookie
+	}
+	return ""
 }
 
 // @Summary Check registration status
@@ -1516,8 +1604,8 @@ func (h *Handler) Register(c *gin.Context) {
 	}
 
 	var req RegisterRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request: " + err.Error()})
+	if err := bindLimitedJSON(c, &req, maxAuthBodyBytes); err != nil {
+		c.JSON(requestBodyErrorStatus(err), gin.H{"error": "Invalid request"})
 		return
 	}
 
@@ -1540,7 +1628,11 @@ func (h *Handler) Register(c *gin.Context) {
 		Password: hashedPassword,
 	}
 
-	if err := h.userRepo.Create(c.Request.Context(), &user); err != nil {
+	if err := h.userRepo.CreateInitialAdmin(c.Request.Context(), &user); err != nil {
+		if errors.Is(err, repository.ErrInitialUserExists) {
+			c.JSON(http.StatusConflict, gin.H{"error": "Registration is not allowed. Admin user already exists"})
+			return
+		}
 		if strings.Contains(err.Error(), "UNIQUE constraint failed") {
 			c.JSON(http.StatusConflict, gin.H{"error": "Username already exists"})
 			return
@@ -1618,52 +1710,53 @@ func (h *Handler) Refresh(c *gin.Context) {
 
 // issueRefreshToken creates a refresh token and sets cookie
 func (h *Handler) issueRefreshToken(c *gin.Context, userID uint) error {
-	tokenValue := generateSecureAPIKey(64)
-	hashed := sha256Hex(tokenValue)
-	rt := models.RefreshToken{
-		UserID:    userID,
-		Hashed:    hashed,
-		ExpiresAt: time.Now().Add(14 * 24 * time.Hour),
-		Revoked:   false,
-	}
+	tokenValue, rt := newRefreshToken(userID)
 	if err := h.refreshTokenRepo.Create(c.Request.Context(), &rt); err != nil {
 		return err
 	}
+	h.setRefreshTokenCookie(c, tokenValue, rt.ExpiresAt)
+	return nil
+}
+
+func newRefreshToken(userID uint) (string, models.RefreshToken) {
+	tokenValue := generateSecureAPIKey(64)
+	return tokenValue, models.RefreshToken{
+		UserID:    userID,
+		FamilyID:  uuid.NewString(),
+		Hashed:    sha256Hex(tokenValue),
+		ExpiresAt: time.Now().Add(14 * 24 * time.Hour),
+		Revoked:   false,
+	}
+}
+
+func (h *Handler) setRefreshTokenCookie(c *gin.Context, tokenValue string, expiresAt time.Time) {
 	http.SetCookie(c.Writer, &http.Cookie{
 		Name:     "scriberr_refresh_token",
 		Value:    tokenValue,
 		Path:     "/",
-		Expires:  rt.ExpiresAt,
+		Expires:  expiresAt,
 		MaxAge:   int((14 * 24 * time.Hour).Seconds()),
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 		Secure:   h.config.SecureCookies,
 	})
-	return nil
 }
 
 // validateAndRotateRefreshToken validates refresh token, revokes old, and issues new
 func (h *Handler) validateAndRotateRefreshToken(c *gin.Context, tokenValue string) (uint, error) {
 	hashed := sha256Hex(tokenValue)
-	rt, err := h.refreshTokenRepo.FindByHash(c.Request.Context(), hashed)
+	replacementValue, replacement := newRefreshToken(0)
+	userID, err := h.refreshTokenRepo.Rotate(c.Request.Context(), hashed, &replacement, time.Now())
 	if err != nil {
 		return 0, err
 	}
-	if rt.Revoked || time.Now().After(rt.ExpiresAt) {
-		return 0, fmt.Errorf("expired or revoked")
-	}
-	// Revoke current
-	_ = h.refreshTokenRepo.Revoke(c.Request.Context(), rt.ID)
-	// Issue new
-	if err := h.issueRefreshToken(c, rt.UserID); err != nil {
-		return 0, err
-	}
-	return rt.UserID, nil
+	h.setRefreshTokenCookie(c, replacementValue, replacement.ExpiresAt)
+	return userID, nil
 }
 
-func (h *Handler) revokeRefreshToken(c *gin.Context, tokenValue string) {
+func (h *Handler) revokeRefreshToken(c *gin.Context, tokenValue string) error {
 	hashed := sha256Hex(tokenValue)
-	_ = h.refreshTokenRepo.RevokeByHash(c.Request.Context(), hashed)
+	return h.refreshTokenRepo.RevokeByHash(c.Request.Context(), hashed)
 }
 
 func sha256Hex(s string) string {
@@ -1691,8 +1784,8 @@ func (h *Handler) ChangePassword(c *gin.Context) {
 	}
 
 	var req ChangePasswordRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request: " + err.Error()})
+	if err := bindLimitedJSON(c, &req, maxAuthBodyBytes); err != nil {
+		c.JSON(requestBodyErrorStatus(err), gin.H{"error": "Invalid request"})
 		return
 	}
 
@@ -1704,7 +1797,7 @@ func (h *Handler) ChangePassword(c *gin.Context) {
 
 	// Use UserService to change password
 	if err := h.userService.ChangePassword(c.Request.Context(), userID.(uint), req.CurrentPassword, req.NewPassword); err != nil {
-		if err.Error() == "incorrect password" {
+		if err.Error() == "incorrect password" || err.Error() == "incorrect current password" {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Current password is incorrect"})
 			return
 		}
@@ -1736,8 +1829,8 @@ func (h *Handler) ChangeUsername(c *gin.Context) {
 	}
 
 	var req ChangeUsernameRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request: " + err.Error()})
+	if err := bindLimitedJSON(c, &req, maxAuthBodyBytes); err != nil {
+		c.JSON(requestBodyErrorStatus(err), gin.H{"error": "Invalid request"})
 		return
 	}
 	// Use UserService to change username
@@ -1792,7 +1885,7 @@ func (h *Handler) ListAPIKeys(c *gin.Context) {
 // @Router /api/v1/api-keys [post]
 func (h *Handler) CreateAPIKey(c *gin.Context) {
 	var req CreateAPIKeyRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := bindJSON(c, &req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request: " + err.Error()})
 		return
 	}
@@ -1896,8 +1989,8 @@ func (h *Handler) GetLLMConfig(c *gin.Context) {
 // @Router /api/v1/llm/config [post]
 func (h *Handler) SaveLLMConfig(c *gin.Context) {
 	var req LLMConfigRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request: " + err.Error()})
+	if err := bindLimitedJSON(c, &req, maxAuthBodyBytes); err != nil {
+		c.JSON(requestBodyErrorStatus(err), gin.H{"error": "Invalid request"})
 		return
 	}
 
@@ -1905,6 +1998,27 @@ func (h *Handler) SaveLLMConfig(c *gin.Context) {
 	if req.Provider == "ollama" && (req.BaseURL == nil || *req.BaseURL == "") {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Base URL is required for Ollama provider"})
 		return
+	}
+	if req.Provider == "ollama" {
+		normalized, err := normalizeProviderBaseURL(*req.BaseURL, false)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid Ollama base URL: " + err.Error()})
+			return
+		}
+		req.BaseURL = &normalized
+		req.OpenAIBaseURL = nil
+	} else {
+		req.BaseURL = nil
+		if req.OpenAIBaseURL != nil && strings.TrimSpace(*req.OpenAIBaseURL) != "" {
+			normalized, err := normalizeProviderBaseURL(*req.OpenAIBaseURL, true)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid OpenAI base URL: " + err.Error()})
+				return
+			}
+			req.OpenAIBaseURL = &normalized
+		} else {
+			req.OpenAIBaseURL = nil
+		}
 	}
 
 	// Check if there's an existing active configuration
@@ -1920,8 +2034,10 @@ func (h *Handler) SaveLLMConfig(c *gin.Context) {
 		if req.APIKey != nil && *req.APIKey != "" {
 			// New key provided
 			apiKeyToSave = req.APIKey
-		} else if existingConfig != nil && existingConfig.APIKey != nil && *existingConfig.APIKey != "" {
-			// Reuse existing key
+		} else if existingConfig != nil && existingConfig.Provider == "openai" &&
+			existingConfig.APIKey != nil && *existingConfig.APIKey != "" &&
+			sameProviderOrigin(existingConfig.OpenAIBaseURL, req.OpenAIBaseURL) {
+			// Reuse only when the credential remains bound to the same origin.
 			apiKeyToSave = existingConfig.APIKey
 		} else {
 			// No key provided and no existing key
@@ -1973,6 +2089,42 @@ func (h *Handler) SaveLLMConfig(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, response)
+}
+
+func normalizeProviderBaseURL(rawURL string, publicOnly bool) (string, error) {
+	if publicOnly {
+		parsed, err := netpolicy.ValidatePublicURL(rawURL, true)
+		if err != nil {
+			return "", err
+		}
+		parsed.RawQuery = ""
+		return strings.TrimRight(parsed.String(), "/"), nil
+	}
+
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil || !parsed.IsAbs() || parsed.Hostname() == "" || parsed.User != nil || parsed.Fragment != "" {
+		return "", fmt.Errorf("must be an absolute HTTP URL without credentials or a fragment")
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", fmt.Errorf("must use HTTP or HTTPS")
+	}
+	parsed.RawQuery = ""
+	return strings.TrimRight(parsed.String(), "/"), nil
+}
+
+func sameProviderOrigin(left, right *string) bool {
+	origin := func(value *string) string {
+		base := "https://api.openai.com/v1"
+		if value != nil && strings.TrimSpace(*value) != "" {
+			base = strings.TrimSpace(*value)
+		}
+		parsed, err := url.Parse(base)
+		if err != nil {
+			return ""
+		}
+		return strings.ToLower(parsed.Scheme + "://" + parsed.Host)
+	}
+	return origin(left) != "" && origin(left) == origin(right)
 }
 
 // generateSecureAPIKey generates a cryptographically secure API key
@@ -2107,7 +2259,7 @@ func (h *Handler) ListProfiles(c *gin.Context) {
 // @Security BearerAuth
 func (h *Handler) CreateProfile(c *gin.Context) {
 	var profile models.TranscriptionProfile
-	if err := c.ShouldBindJSON(&profile); err != nil {
+	if err := bindJSON(c, &profile); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request data"})
 		return
 	}
@@ -2177,7 +2329,7 @@ func (h *Handler) UpdateProfile(c *gin.Context) {
 	}
 
 	var updatedProfile models.TranscriptionProfile
-	if err := c.ShouldBindJSON(&updatedProfile); err != nil {
+	if err := bindJSON(c, &updatedProfile); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request data"})
 		return
 	}
@@ -2196,6 +2348,12 @@ func (h *Handler) UpdateProfile(c *gin.Context) {
 	// GORM Save updates all fields.
 	updatedProfile.ID = existingProfile.ID
 	updatedProfile.CreatedAt = existingProfile.CreatedAt
+	if updatedProfile.Parameters.HfToken == nil {
+		updatedProfile.Parameters.HfToken = existingProfile.Parameters.HfToken
+	}
+	if updatedProfile.Parameters.APIKey == nil {
+		updatedProfile.Parameters.APIKey = existingProfile.Parameters.APIKey
+	}
 
 	if err := h.profileRepo.Update(c.Request.Context(), &updatedProfile); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update profile"})
@@ -2290,6 +2448,11 @@ type QuickTranscriptionRequest struct {
 // @Security ApiKeyAuth
 // @Security BearerAuth
 func (h *Handler) SubmitQuickTranscription(c *gin.Context) {
+	release, ok := h.beginMultipartUpload(c, h.config.UploadDir)
+	if !ok {
+		return
+	}
+	defer release()
 	// Parse multipart form
 	file, header, err := c.Request.FormFile("audio")
 	if err != nil {
@@ -2297,6 +2460,9 @@ func (h *Handler) SubmitQuickTranscription(c *gin.Context) {
 		return
 	}
 	defer file.Close()
+	if !h.acceptUploadSize(c, h.config.UploadDir, header.Size) {
+		return
+	}
 
 	var params models.WhisperXParams
 
@@ -2381,6 +2547,14 @@ func (h *Handler) SubmitQuickTranscription(c *gin.Context) {
 	// Submit quick transcription job
 	job, err := h.quickTranscription.SubmitQuickJob(file, header.Filename, params)
 	if err != nil {
+		if errors.Is(err, transcription.ErrQuickCapacity) {
+			c.JSON(http.StatusTooManyRequests, gin.H{"error": "Quick transcription capacity is full"})
+			return
+		}
+		if errors.Is(err, transcription.ErrQuickUploadTooLarge) {
+			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "Quick transcription upload is too large"})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to submit quick transcription: %v", err)})
 		return
 	}
@@ -2428,16 +2602,32 @@ func (h *Handler) GetQuickTranscriptionStatus(c *gin.Context) {
 // @Security BearerAuth
 func (h *Handler) DownloadFromYouTube(c *gin.Context) {
 	var req YouTubeDownloadRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	if err := bindLimitedJSON(c, &req, maxAuthBodyBytes); err != nil {
+		c.JSON(requestBodyErrorStatus(err), gin.H{"error": "Invalid request"})
 		return
 	}
 
-	// Validate YouTube URL
-	if !strings.Contains(req.URL, "youtube.com") && !strings.Contains(req.URL, "youtu.be") {
+	// Validate YouTube URL before passing it to yt-dlp. Substring checks can be
+	// bypassed with attacker-controlled hosts such as youtube.com.evil.test.
+	if !isAllowedYouTubeURL(req.URL) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid YouTube URL"})
 		return
 	}
+
+	release, err := h.resourceAdmission.tryAcquire()
+	if err != nil {
+		c.JSON(http.StatusTooManyRequests, gin.H{"error": "Media processing capacity is full"})
+		return
+	}
+	defer release()
+	processCtx, cancel := context.WithTimeout(c.Request.Context(), h.resourceAdmission.timeout)
+	defer cancel()
+	downloadLimit, releaseDisk, err := h.reserveYouTubeCapacity(h.config.UploadDir)
+	if err != nil {
+		c.JSON(http.StatusInsufficientStorage, gin.H{"error": err.Error()})
+		return
+	}
+	defer releaseDisk()
 
 	// Create upload directory
 	uploadDir := h.config.UploadDir
@@ -2458,9 +2648,11 @@ func (h *Handler) DownloadFromYouTube(c *gin.Context) {
 	} else {
 		// Get title first using standalone yt-dlp
 		titleStart := time.Now()
-		cmd := exec.Command("yt-dlp", "--get-title", req.URL)
-		var out bytes.Buffer
-		cmd.Stdout = &out
+		titleCtx, titleCancel := context.WithTimeout(processCtx, 30*time.Second)
+		defer titleCancel()
+		cmd := processutil.CommandContext(titleCtx, "yt-dlp", "--get-title", "--no-playlist", req.URL)
+		out := newBoundedBuffer(maxUploadTitleLength)
+		cmd.Stdout = out
 		err := cmd.Run()
 		if err != nil {
 			title = "YouTube Audio"
@@ -2476,18 +2668,20 @@ func (h *Handler) DownloadFromYouTube(c *gin.Context) {
 	downloadStart := time.Now()
 
 	// Executing yt-dlp directly (standalone binary)
-	ytDlpCmd := exec.Command("yt-dlp",
+	ytDlpCmd := processutil.CommandContext(processCtx, "yt-dlp",
 		"--extract-audio",
 		"--audio-format", "mp3",
 		"--audio-quality", "0", // best quality
 		"--output", filePath,
 		"--no-playlist",
+		"--max-filesize", strconv.FormatInt(downloadLimit, 10),
+		"--no-progress",
 		req.URL,
 	)
 
 	// Execute download and capture stderr for better error messages
-	var stderr bytes.Buffer
-	ytDlpCmd.Stderr = &stderr
+	stderr := newBoundedBuffer(16 * 1024)
+	ytDlpCmd.Stderr = stderr
 
 	if err := ytDlpCmd.Run(); err != nil {
 		stderrOutput := stderr.String()
@@ -2498,10 +2692,14 @@ func (h *Handler) DownloadFromYouTube(c *gin.Context) {
 			"stderr", stderrOutput,
 			"duration", time.Since(downloadStart))
 
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":   fmt.Sprintf("Failed to download YouTube audio: %v", err),
-			"details": stderrOutput,
-		})
+		for _, partial := range matchingDownloadedFiles(uploadDir, jobID) {
+			_ = os.Remove(partial)
+		}
+		status := http.StatusBadGateway
+		if processCtx.Err() != nil {
+			status = http.StatusGatewayTimeout
+		}
+		c.JSON(status, gin.H{"error": "Failed to download YouTube audio"})
 		return
 	}
 
@@ -2518,6 +2716,11 @@ func (h *Handler) DownloadFromYouTube(c *gin.Context) {
 	// Get file size for performance logging
 	fileInfo, err := os.Stat(actualFilePath)
 	if err == nil {
+		if fileInfo.Size() > downloadLimit {
+			_ = os.Remove(actualFilePath)
+			c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "Downloaded media exceeds the configured size limit"})
+			return
+		}
 		fileSizeMB := float64(fileInfo.Size()) / 1024 / 1024
 		logger.Info("YouTube download completed",
 			"url", req.URL,
@@ -2548,6 +2751,25 @@ func (h *Handler) DownloadFromYouTube(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, job)
+}
+
+func matchingDownloadedFiles(uploadDir, jobID string) []string {
+	matches, _ := filepath.Glob(filepath.Join(uploadDir, jobID+".*"))
+	return matches
+}
+
+func isAllowedYouTubeURL(rawURL string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil || !parsed.IsAbs() || parsed.User != nil {
+		return false
+	}
+
+	if parsed.Scheme != "https" {
+		return false
+	}
+
+	host := strings.TrimSuffix(strings.ToLower(parsed.Hostname()), ".")
+	return host == "youtu.be" || host == "youtube.com" || strings.HasSuffix(host, ".youtube.com")
 }
 
 // @Summary Get user's default profile
@@ -2631,7 +2853,7 @@ func (h *Handler) SetUserDefaultProfile(c *gin.Context) {
 	}
 
 	var req SetUserDefaultProfileRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := bindJSON(c, &req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request: " + err.Error()})
 		return
 	}
@@ -2721,7 +2943,7 @@ func (h *Handler) UpdateUserSettings(c *gin.Context) {
 	}
 
 	var req UpdateUserSettingsRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := bindJSON(c, &req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request: " + err.Error()})
 		return
 	}

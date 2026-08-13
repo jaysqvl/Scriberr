@@ -12,7 +12,8 @@ WORKDIR /web
 # Install deps and build web/frontend
 COPY web/frontend/package*.json ./frontend/
 RUN cd frontend \
-  && npm ci
+  && npm ci \
+  && npm audit
 
 COPY web/frontend ./frontend
 RUN cd frontend \
@@ -22,7 +23,7 @@ RUN cd frontend \
 ########################
 # Go build stage
 ########################
-FROM golang:1.24-bookworm AS go-builder
+FROM golang:1.26.5-bookworm AS go-builder
 WORKDIR /src
 ARG VERSION=dev
 ARG COMMIT=none
@@ -34,6 +35,10 @@ RUN go mod download
 
 # Copy source
 COPY . .
+
+# Block image publication when reachable Go vulnerabilities are known.
+ARG GOVULNCHECK_VERSION=v1.6.0
+RUN go run golang.org/x/vuln/cmd/govulncheck@${GOVULNCHECK_VERSION} ./cmd/... ./internal/... ./pkg/...
 
 # Copy built UI into embed path
 RUN rm -rf internal/web/dist && mkdir -p internal/web

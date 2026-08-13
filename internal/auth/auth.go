@@ -24,16 +24,18 @@ func NewAuthService(jwtSecret string) *AuthService {
 
 // Claims represents JWT claims
 type Claims struct {
-	UserID   uint   `json:"user_id"`
-	Username string `json:"username"`
+	UserID       uint   `json:"user_id"`
+	Username     string `json:"username"`
+	TokenVersion uint64 `json:"token_version"`
 	jwt.RegisteredClaims
 }
 
 // GenerateToken generates a JWT token for a user
 func (as *AuthService) GenerateToken(user *models.User) (string, error) {
 	claims := &Claims{
-		UserID:   user.ID,
-		Username: user.Username,
+		UserID:       user.ID,
+		Username:     user.Username,
+		TokenVersion: user.TokenVersion,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
@@ -47,8 +49,9 @@ func (as *AuthService) GenerateToken(user *models.User) (string, error) {
 // GenerateLongLivedToken generates a JWT token for a user that expires in 1 year
 func (as *AuthService) GenerateLongLivedToken(user *models.User) (string, error) {
 	claims := &Claims{
-		UserID:   user.ID,
-		Username: user.Username,
+		UserID:       user.ID,
+		Username:     user.Username,
+		TokenVersion: user.TokenVersion,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(365 * 24 * time.Hour)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
@@ -63,7 +66,7 @@ func (as *AuthService) GenerateLongLivedToken(user *models.User) (string, error)
 func (as *AuthService) ValidateToken(tokenString string) (*Claims, error) {
 	token, err := jwt.ParseWithClaims(tokenString, &Claims{}, func(token *jwt.Token) (interface{}, error) {
 		return as.jwtSecret, nil
-	})
+	}, jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}))
 
 	if err != nil {
 		return nil, err

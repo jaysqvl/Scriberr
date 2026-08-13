@@ -24,7 +24,6 @@ import { useToast } from "@/components/ui/toast";
 import { useState, useEffect } from "react";
 import ReactMarkdown from 'react-markdown';
 import remarkMath from 'remark-math';
-import rehypeRaw from 'rehype-raw';
 import rehypeKatex from 'rehype-katex';
 import rehypeHighlight from 'rehype-highlight';
 import { useSummaryTemplates, useSummarizer, useExistingSummary } from "@/features/transcription/hooks/useTranscriptionSummary";
@@ -224,7 +223,7 @@ export function SummaryDialog({ audioId, isOpen, onClose, llmReady }: SummaryDia
                                 <div className="prose prose-stone dark:prose-invert max-w-none text-[#171717] dark:text-[#EDEDED] leading-relaxed">
                                     <ReactMarkdown
                                         remarkPlugins={[remarkMath]}
-                                        rehypePlugins={[rehypeRaw as any, rehypeKatex as any, rehypeHighlight as any]} // eslint-disable-line @typescript-eslint/no-explicit-any
+                                        rehypePlugins={[rehypeKatex as any, rehypeHighlight as any]} // eslint-disable-line @typescript-eslint/no-explicit-any
                                         components={{
                                             p: ({ ...props }) => <p className="text-[#525252] dark:text-[#A3A3A3] leading-7 mb-4" {...props} />,
                                             h1: ({ ...props }) => <h1 className="text-[#171717] dark:text-[#EDEDED] font-bold text-2xl mt-6 mb-4" {...props} />,

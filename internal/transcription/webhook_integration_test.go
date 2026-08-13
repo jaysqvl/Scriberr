@@ -2,33 +2,24 @@ package transcription
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
-	"scriberr/internal/models"
-	"scriberr/internal/webhook"
-
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
+	"scriberr/internal/models"
 )
 
-func TestWebhookIntegration_Failure(t *testing.T) {
+func TestWebhookIntegrationRejectsProtectedCallback(t *testing.T) {
 	// Setup mock repository
 	mockRepo := new(MockJobRepository)
 
 	// Setup webhook server
 	webhookCalled := make(chan bool, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var payload webhook.WebhookPayload
-		json.NewDecoder(r.Body).Decode(&payload)
-
-		// Verify payload
-		if payload.Status == models.StatusFailed {
-			webhookCalled <- true
-		}
+		webhookCalled <- true
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
@@ -59,12 +50,11 @@ func TestWebhookIntegration_Failure(t *testing.T) {
 	err := service.ProcessJob(context.Background(), jobID)
 	assert.Error(t, err)
 
-	// Verify webhook was called
+	// Loopback destinations must be rejected before any request is sent.
 	select {
 	case <-webhookCalled:
-		// Success
-	case <-time.After(2 * time.Second):
-		t.Fatal("Webhook was not called within timeout")
+		t.Fatal("protected webhook destination was contacted")
+	case <-time.After(100 * time.Millisecond):
 	}
 
 	mockRepo.AssertExpectations(t)

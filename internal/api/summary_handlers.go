@@ -62,7 +62,7 @@ func (h *Handler) ListSummaryTemplates(c *gin.Context) {
 // @Router /api/v1/summaries [post]
 func (h *Handler) CreateSummaryTemplate(c *gin.Context) {
 	var req SummaryTemplateRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := bindJSON(c, &req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -126,7 +126,7 @@ func (h *Handler) GetSummaryTemplate(c *gin.Context) {
 func (h *Handler) UpdateSummaryTemplate(c *gin.Context) {
 	id := c.Param("id")
 	var req SummaryTemplateRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := bindJSON(c, &req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -205,7 +205,7 @@ func (h *Handler) GetSummarySettings(c *gin.Context) {
 // @Router /api/v1/summaries/settings [post]
 func (h *Handler) SaveSummarySettings(c *gin.Context) {
 	var req SummarySettingsRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := bindJSON(c, &req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}

@@ -180,6 +180,11 @@ Scriberr works out of the box. However, for Homebrew or manual installations, yo
 | `DATABASE_PATH` | Path to the SQLite database file. | `data/scriberr.db` |
 | `UPLOAD_DIR` | Directory for storing uploaded files. | `data/uploads` |
 | `TRANSCRIPTS_DIR` | Directory for storing transcripts. | `data/transcripts` |
+| `MAX_UPLOAD_SIZE_GB` | Maximum bytes accepted across one upload session. | `20` |
+| `MIN_FREE_DISK_GB` | Disk space kept free after upload reservations. | `1` |
+| `MAX_ACTIVE_UPLOADS` | Maximum active resumable sessions and concurrent upload writes. | `8` |
+| `MAX_CONCURRENT_MEDIA_JOBS` | Maximum concurrent downloads, conversions, and quick jobs. | `2` |
+| `MEDIA_PROCESS_TIMEOUT_MINUTES` | Deadline for queued transcription and media subprocesses. | `120` |
 | `WHISPERX_ENV` | Path to the managed Python environment for models. | `data/whisperx-env` |
 | `OPENAI_API_KEY` | API Key for OpenAI (optional). | `""` |
 | `JWT_SECRET` | Secret for signing JWTs. Auto-generated if not set. | Auto-generated |
@@ -215,6 +220,8 @@ Scriberr includes in-app login throttling by default. Failed logins are tracked 
 If Scriberr is behind a reverse proxy and you want throttling to use the original client IP, set `TRUSTED_PROXIES` to the proxy IP or CIDR range. Leave it empty when exposing Scriberr directly so forwarded headers cannot be spoofed.
 
 The auth logger emits stable fields such as `event=login`, `result=failure`, `reason=invalid_password`, and `ip=...`, so host-level tools like fail2ban can still be layered on top if desired.
+
+When a reverse proxy is used, configure its request-body and upstream timeouts to match these limits. The proxy body limit must be at least `MAX_UPLOAD_SIZE_GB`, while its upstream timeout should not exceed the operational deadline you intend for `MEDIA_PROCESS_TIMEOUT_MINUTES`.
 
 ### Docker Deployment
 

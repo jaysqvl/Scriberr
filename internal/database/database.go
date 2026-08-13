@@ -3,6 +3,7 @@ package database
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"time"
@@ -11,7 +12,7 @@ import (
 
 	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
+	gormlogger "gorm.io/gorm/logger"
 )
 
 // DB is the global database instance
@@ -39,9 +40,16 @@ func Initialize(dbPath string) error {
 		dbPath)
 
 	// Open database connection with optimized config
+	databaseLogger := gormlogger.New(log.New(os.Stdout, "", log.LstdFlags), gormlogger.Config{
+		SlowThreshold:             time.Second,
+		LogLevel:                  gormlogger.Warn,
+		IgnoreRecordNotFoundError: true,
+		ParameterizedQueries:      true,
+		Colorful:                  false,
+	})
 	DB, err = gorm.Open(sqlite.Open(dsn), &gorm.Config{
-		Logger:          logger.Default.LogMode(logger.Warn), // Reduce logging overhead
-		CreateBatchSize: 100,                                 // Optimize batch inserts
+		Logger:          databaseLogger,
+		CreateBatchSize: 100, // Optimize batch inserts
 	})
 	if err != nil {
 		return fmt.Errorf("failed to connect to database: %v", err)
@@ -76,6 +84,7 @@ func Initialize(dbPath string) error {
 		&models.Summary{},
 		&models.Note{},
 		&models.RefreshToken{},
+		&models.RevokedAccessToken{},
 		&models.UploadSession{},
 		&models.UploadSessionFile{},
 	); err != nil {
@@ -101,6 +110,20 @@ func Initialize(dbPath string) error {
 	// Add unique constraint for speaker mappings (transcription_job_id + original_speaker)
 	if err := DB.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_speaker_mappings_unique ON speaker_mappings(transcription_job_id, original_speaker)").Error; err != nil {
 		return fmt.Errorf("failed to create unique constraint for speaker mappings: %v", err)
+	}
+
+	// Execution history is response metadata, not a credential store. Remove
+	// secrets captured by older versions before those rows can be returned.
+	if err := DB.Model(&models.TranscriptionJobExecution{}).
+		Where("actual_hf_token IS NOT NULL OR actual_api_key IS NOT NULL").
+		Updates(map[string]interface{}{
+			"actual_hf_token": nil,
+			"actual_api_key":  nil,
+		}).Error; err != nil {
+		return fmt.Errorf("failed to scrub execution credentials: %v", err)
+	}
+	if err := DB.Where("expires_at <= ?", time.Now()).Delete(&models.RevokedAccessToken{}).Error; err != nil {
+		return fmt.Errorf("failed to clean expired access-token revocations: %v", err)
 	}
 
 	return nil

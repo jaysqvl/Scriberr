@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"scriberr/internal/netpolicy"
 )
 
 // OpenAIService handles OpenAI API interactions
@@ -29,10 +31,18 @@ func NewOpenAIService(apiKey string, baseURL *string) *OpenAIService {
 	return &OpenAIService{
 		apiKey:  apiKey,
 		baseURL: url,
-		client: &http.Client{
-			Timeout: 300 * time.Second,
-		},
+		client:  netpolicy.NewPublicHTTPClient(300 * time.Second),
 	}
+}
+
+// NewOpenAIServiceWithHTTPClient supports repository tests and embedded
+// deployments that provide an equivalently constrained transport.
+func NewOpenAIServiceWithHTTPClient(apiKey string, baseURL *string, client *http.Client) *OpenAIService {
+	service := NewOpenAIService(apiKey, baseURL)
+	if client != nil {
+		service.client = client
+	}
+	return service
 }
 
 // ChatMessage represents a chat message for OpenAI API
@@ -114,12 +124,11 @@ func (s *OpenAIService) GetModels(ctx context.Context) ([]string, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("API error: %d - %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("API error: %d", resp.StatusCode)
 	}
 
 	var modelsResp ModelsResponse
-	if err := json.NewDecoder(resp.Body).Decode(&modelsResp); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxProviderResponseBytes)).Decode(&modelsResp); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
@@ -134,7 +143,7 @@ func (s *OpenAIService) GetModels(ctx context.Context) ([]string, error) {
 		} else {
 			// If custom baseURL → return all models
 			chatModels = append(chatModels, model.ID)
-    	}
+		}
 	}
 
 	return chatModels, nil
@@ -174,13 +183,12 @@ func (s *OpenAIService) ChatCompletion(ctx context.Context, model string, messag
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		log.Printf("[openai] chat completion error status=%d body=%s", resp.StatusCode, truncate(string(body), 500))
-		return nil, fmt.Errorf("API error: %d - %s", resp.StatusCode, string(body))
+		log.Printf("[openai] chat completion error status=%d", resp.StatusCode)
+		return nil, fmt.Errorf("API error: %d", resp.StatusCode)
 	}
 
 	var chatResp ChatResponse
-	if err := json.NewDecoder(resp.Body).Decode(&chatResp); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxProviderResponseBytes)).Decode(&chatResp); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
@@ -233,13 +241,14 @@ func (s *OpenAIService) ChatCompletionStream(ctx context.Context, model string, 
 		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
-			body, _ := io.ReadAll(resp.Body)
-			log.Printf("[openai] chat stream error status=%d body=%s", resp.StatusCode, truncate(string(body), 500))
-			errorChan <- fmt.Errorf("API error: %d - %s", resp.StatusCode, string(body))
+			log.Printf("[openai] chat stream error status=%d", resp.StatusCode)
+			errorChan <- fmt.Errorf("API error: %d", resp.StatusCode)
 			return
 		}
 
-		scanner := bufio.NewScanner(resp.Body)
+		limitedBody := &io.LimitedReader{R: resp.Body, N: maxProviderResponseBytes + 1}
+		scanner := bufio.NewScanner(limitedBody)
+		scanner.Buffer(make([]byte, 64*1024), maxProviderStreamLine)
 		loggedFirst := false
 		for scanner.Scan() {
 			line := scanner.Text()
@@ -281,18 +290,12 @@ func (s *OpenAIService) ChatCompletionStream(ctx context.Context, model string, 
 
 		if err := scanner.Err(); err != nil {
 			errorChan <- fmt.Errorf("error reading stream: %w", err)
+		} else if limitedBody.N <= 0 {
+			errorChan <- fmt.Errorf("provider response exceeded size limit")
 		}
 	}()
 
 	return contentChan, errorChan
-}
-
-// truncate returns s trimmed to at most n runes.
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "..."
 }
 
 // ValidateAPIKey validates the provided API key by making a test request

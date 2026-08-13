@@ -91,6 +91,7 @@ func (suite *APIHandlerTestSuite) SetupSuite() {
 		multiTrackProcessor,
 		broadcaster,
 	)
+	suite.handler.SetOutboundHTTPClient(suite.mockOpenAI.Client())
 
 	// Set up router
 	suite.router = api.SetupRoutes(suite.handler, suite.helper.AuthService)
@@ -189,6 +190,25 @@ func (suite *APIHandlerTestSuite) TestHealthCheck() {
 	assert.Contains(suite.T(), response, "version")
 	assert.Contains(suite.T(), response, "commit")
 	assert.Contains(suite.T(), response, "built")
+}
+
+func (suite *APIHandlerTestSuite) TestDownloadFromYouTubeRejectsSSRFURLs() {
+	badURLs := []string{
+		"https://youtube.com.evil.example/watch?v=abc123",
+		"https://evil.example/watch?next=youtube.com",
+		"https://youtube.com@127.0.0.1/watch?v=abc123",
+		"https://169.254.169.254/latest/meta-data?youtube.com",
+		"http://youtube.com/watch?v=abc123",
+	}
+
+	for _, rawURL := range badURLs {
+		suite.T().Run(rawURL, func(t *testing.T) {
+			w := suite.makeAuthenticatedRequest("POST", "/api/v1/transcription/youtube", map[string]string{"url": rawURL}, false)
+
+			assert.Equal(t, http.StatusBadRequest, w.Code)
+			assert.Contains(t, w.Body.String(), "Invalid YouTube URL")
+		})
+	}
 }
 
 // Test user registration
@@ -737,6 +757,128 @@ func (suite *APIHandlerTestSuite) TestLogout() {
 	suite.router.ServeHTTP(w, req)
 
 	assert.Equal(suite.T(), 200, w.Code)
+}
+
+func (suite *APIHandlerTestSuite) TestLogoutRevokesPresentedAccessToken() {
+	w := suite.makeAuthenticatedRequest("GET", "/api/v1/transcription/list", nil, true)
+	assert.Equal(suite.T(), http.StatusOK, w.Code)
+
+	req, _ := http.NewRequest("POST", "/api/v1/auth/logout", nil)
+	req.Header.Set("Authorization", "Bearer "+suite.helper.TestToken)
+	w = httptest.NewRecorder()
+	suite.router.ServeHTTP(w, req)
+	assert.Equal(suite.T(), http.StatusOK, w.Code)
+
+	w = suite.makeAuthenticatedRequest("GET", "/api/v1/transcription/list", nil, true)
+	assert.Equal(suite.T(), http.StatusUnauthorized, w.Code)
+}
+
+func (suite *APIHandlerTestSuite) TestPasswordChangeRevokesAccessRefreshAndCLITokens() {
+	cliToken, err := suite.helper.AuthService.GenerateLongLivedToken(suite.helper.TestUser)
+	assert.NoError(suite.T(), err)
+
+	login := suite.makeLoginRequest(suite.router, suite.helper.TestUser.Username, "testpassword123", "203.0.113.250:5000", "")
+	assert.Equal(suite.T(), http.StatusOK, login.Code)
+	var refreshCookie *http.Cookie
+	for _, cookie := range login.Result().Cookies() {
+		if cookie.Name == "scriberr_refresh_token" {
+			refreshCookie = cookie
+			break
+		}
+	}
+	assert.NotNil(suite.T(), refreshCookie)
+
+	change := suite.makeAuthenticatedRequest("POST", "/api/v1/auth/change-password", map[string]string{
+		"currentPassword": "testpassword123",
+		"newPassword":     "new-test-password",
+		"confirmPassword": "new-test-password",
+	}, true)
+	assert.Equal(suite.T(), http.StatusOK, change.Code, change.Body.String())
+
+	for _, token := range []string{suite.helper.TestToken, cliToken} {
+		req, _ := http.NewRequest("GET", "/api/v1/transcription/list", nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		w := httptest.NewRecorder()
+		suite.router.ServeHTTP(w, req)
+		assert.Equal(suite.T(), http.StatusUnauthorized, w.Code)
+	}
+
+	refreshReq, _ := http.NewRequest("POST", "/api/v1/auth/refresh", nil)
+	refreshReq.AddCookie(refreshCookie)
+	refresh := httptest.NewRecorder()
+	suite.router.ServeHTTP(refresh, refreshReq)
+	assert.Equal(suite.T(), http.StatusUnauthorized, refresh.Code)
+}
+
+func (suite *APIHandlerTestSuite) TestAPIKeyCannotAdministerLLMConfiguration() {
+	w := suite.makeAuthenticatedRequest("GET", "/api/v1/llm/config", nil, false)
+	assert.Equal(suite.T(), http.StatusUnauthorized, w.Code)
+
+	w = suite.makeAuthenticatedRequest("POST", "/api/v1/llm/config", map[string]interface{}{
+		"provider":        "openai",
+		"openai_base_url": "https://attacker.example/v1",
+		"is_active":       true,
+	}, false)
+	assert.Equal(suite.T(), http.StatusUnauthorized, w.Code)
+}
+
+func (suite *APIHandlerTestSuite) TestLLMConfigurationRejectsProtectedOriginsAndSecretReuseAcrossOrigins() {
+	w := suite.makeAuthenticatedRequest("POST", "/api/v1/llm/config", map[string]interface{}{
+		"provider":        "openai",
+		"openai_base_url": "https://127.0.0.1/v1",
+		"api_key":         "replacement-key",
+		"is_active":       true,
+	}, true)
+	assert.Equal(suite.T(), http.StatusBadRequest, w.Code)
+
+	w = suite.makeAuthenticatedRequest("POST", "/api/v1/llm/config", map[string]interface{}{
+		"provider":        "openai",
+		"openai_base_url": "https://example.com/v1",
+		"is_active":       true,
+	}, true)
+	assert.Equal(suite.T(), http.StatusBadRequest, w.Code)
+	assert.Contains(suite.T(), w.Body.String(), "API key is required")
+}
+
+func (suite *APIHandlerTestSuite) TestProfileSecretsArePreservedButNeverReturned() {
+	hfToken := "hf_profile_secret"
+	apiKey := "sk_profile_secret"
+	w := suite.makeAuthenticatedRequest("POST", "/api/v1/profiles/", map[string]interface{}{
+		"name": "Secret Profile",
+		"parameters": map[string]interface{}{
+			"model":    "small",
+			"hf_token": hfToken,
+			"api_key":  apiKey,
+		},
+	}, false)
+	assert.Equal(suite.T(), http.StatusOK, w.Code, w.Body.String())
+	assert.NotContains(suite.T(), w.Body.String(), hfToken)
+	assert.NotContains(suite.T(), w.Body.String(), apiKey)
+
+	var created models.TranscriptionProfile
+	assert.NoError(suite.T(), json.Unmarshal(w.Body.Bytes(), &created))
+	w = suite.makeAuthenticatedRequest("PUT", "/api/v1/profiles/"+created.ID, map[string]interface{}{
+		"name": "Renamed Secret Profile",
+	}, false)
+	assert.Equal(suite.T(), http.StatusOK, w.Code, w.Body.String())
+	assert.NotContains(suite.T(), w.Body.String(), hfToken)
+	assert.NotContains(suite.T(), w.Body.String(), apiKey)
+
+	var stored models.TranscriptionProfile
+	assert.NoError(suite.T(), suite.helper.DB.Where("id = ?", created.ID).First(&stored).Error)
+	assert.NotNil(suite.T(), stored.Parameters.HfToken)
+	assert.NotNil(suite.T(), stored.Parameters.APIKey)
+	assert.Equal(suite.T(), hfToken, *stored.Parameters.HfToken)
+	assert.Equal(suite.T(), apiKey, *stored.Parameters.APIKey)
+}
+
+func (suite *APIHandlerTestSuite) TestOversizedLoginBodyReturnsRequestTooLarge() {
+	body := `{"username":"` + strings.Repeat("a", 70*1024) + `","password":"test"}`
+	req, _ := http.NewRequest("POST", "/api/v1/auth/login", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	suite.router.ServeHTTP(w, req)
+	assert.Equal(suite.T(), http.StatusRequestEntityTooLarge, w.Code)
 }
 
 func TestAPIHandlerTestSuite(t *testing.T) {

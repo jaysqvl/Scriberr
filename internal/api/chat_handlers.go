@@ -92,7 +92,7 @@ func (h *Handler) getLLMService(ctx context.Context) (llm.Service, string, error
 		if cfg.APIKey == nil || *cfg.APIKey == "" {
 			return nil, cfg.Provider, fmt.Errorf("OpenAI API key not configured")
 		}
-		return llm.NewOpenAIService(*cfg.APIKey, cfg.OpenAIBaseURL), cfg.Provider, nil
+		return llm.NewOpenAIServiceWithHTTPClient(*cfg.APIKey, cfg.OpenAIBaseURL, h.outboundHTTPClient), cfg.Provider, nil
 	case "ollama":
 		if cfg.BaseURL == nil || *cfg.BaseURL == "" {
 			return nil, cfg.Provider, fmt.Errorf("Ollama base URL not configured")
@@ -147,7 +147,7 @@ func (h *Handler) GetChatModels(c *gin.Context) {
 // @Security BearerAuth
 func (h *Handler) CreateChatSession(c *gin.Context) {
 	var req ChatCreateRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := bindJSON(c, &req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -369,7 +369,7 @@ func (h *Handler) SendChatMessage(c *gin.Context) {
 	}
 
 	var req ChatMessageRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := bindJSON(c, &req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
@@ -702,7 +702,7 @@ func (h *Handler) UpdateChatSessionTitle(c *gin.Context) {
 	var req struct {
 		Title string `json:"title" binding:"required,min=1,max=255"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := bindJSON(c, &req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}

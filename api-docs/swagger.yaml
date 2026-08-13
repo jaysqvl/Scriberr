@@ -29,10 +29,13 @@ definitions:
   api.ChangePasswordRequest:
     properties:
       confirmPassword:
+        maxLength: 1024
         type: string
       currentPassword:
+        maxLength: 1024
         type: string
       newPassword:
+        maxLength: 1024
         minLength: 6
         type: string
     required:
@@ -47,6 +50,7 @@ definitions:
         minLength: 3
         type: string
       password:
+        maxLength: 1024
         type: string
     required:
     - newUsername
@@ -211,8 +215,11 @@ definitions:
   api.LoginRequest:
     properties:
       password:
+        maxLength: 1024
         type: string
       username:
+        maxLength: 50
+        minLength: 1
         type: string
     required:
     - password
@@ -272,8 +279,10 @@ definitions:
   api.RegisterRequest:
     properties:
       confirmPassword:
+        maxLength: 1024
         type: string
       password:
+        maxLength: 1024
         minLength: 6
         type: string
       username:
@@ -389,13 +398,16 @@ definitions:
   api.ValidateOpenAIKeyRequest:
     properties:
       api_key:
+        maxLength: 8192
         type: string
     type: object
   api.YouTubeDownloadRequest:
     properties:
       title:
+        maxLength: 500
         type: string
       url:
+        maxLength: 2048
         type: string
     required:
     - url
@@ -1406,7 +1418,6 @@ paths:
               type: string
             type: object
       security:
-      - ApiKeyAuth: []
       - BearerAuth: []
       summary: Validate OpenAI API Key
       tags:

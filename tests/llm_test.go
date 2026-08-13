@@ -49,7 +49,7 @@ func (suite *LLMTestSuite) setupMockServer() {
 
 	// Create OpenAI service with mock server
 	mockURL := suite.mockServer.URL
-	service := llm.NewOpenAIService("test-api-key", &mockURL)
+	service := llm.NewOpenAIServiceWithHTTPClient("test-api-key", &mockURL, suite.mockServer.Client())
 	suite.service = service
 }
 

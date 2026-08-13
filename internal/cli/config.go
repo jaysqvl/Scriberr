@@ -58,7 +58,26 @@ func SaveConfig(serverURL, token, watchFolder string) (string, error) {
 		return "", err
 	}
 	configPath := filepath.Join(home, ".scriberr.yaml")
-	return configPath, viper.WriteConfigAs(configPath)
+
+	// Tighten an existing file before writing so a crash cannot leave a fresh
+	// bearer token in a previously world-readable config.
+	file, err := os.OpenFile(configPath, os.O_CREATE|os.O_WRONLY, 0600)
+	if err != nil {
+		return "", fmt.Errorf("secure CLI config: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return "", fmt.Errorf("secure CLI config: %w", err)
+	}
+	if err := os.Chmod(configPath, 0600); err != nil {
+		return "", fmt.Errorf("secure CLI config permissions: %w", err)
+	}
+	if err := viper.WriteConfigAs(configPath); err != nil {
+		return "", err
+	}
+	if err := os.Chmod(configPath, 0600); err != nil {
+		return "", fmt.Errorf("secure CLI config permissions: %w", err)
+	}
+	return configPath, nil
 }
 
 // GetConfig returns the current configuration

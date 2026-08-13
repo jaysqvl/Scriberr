@@ -2,10 +2,21 @@ package repository
 
 import (
 	"context"
-	"scriberr/internal/models"
+	"errors"
+	"fmt"
+	"strings"
 	"time"
 
+	"scriberr/internal/models"
+
+	"github.com/google/uuid"
 	"gorm.io/gorm"
+)
+
+var (
+	ErrInitialUserExists   = errors.New("initial administrator already exists")
+	ErrRefreshTokenInvalid = errors.New("refresh token is invalid")
+	ErrRefreshTokenReplay  = errors.New("refresh token replay detected")
 )
 
 // UserRepository handles user-specific database operations
@@ -14,6 +25,8 @@ type UserRepository interface {
 	FindByUsername(ctx context.Context, username string) (*models.User, error)
 	Count(ctx context.Context) (int64, error)
 	CountWithAutoTranscription(ctx context.Context) (int64, error)
+	CreateInitialAdmin(ctx context.Context, user *models.User) error
+	UpdatePasswordAndRevokeSessions(ctx context.Context, userID uint, hashedPassword string) error
 }
 
 type userRepository struct {
@@ -45,6 +58,50 @@ func (r *userRepository) CountWithAutoTranscription(ctx context.Context) (int64,
 	var count int64
 	err := r.db.WithContext(ctx).Model(&models.User{}).Where("auto_transcription_enabled = ?", true).Count(&count).Error
 	return count, err
+}
+
+func (r *userRepository) CreateInitialAdmin(ctx context.Context, user *models.User) error {
+	for attempt := 0; attempt < 4; attempt++ {
+		now := time.Now()
+		result := r.db.WithContext(ctx).Exec(`
+			INSERT INTO users (username, password, token_version, auto_transcription_enabled, created_at, updated_at)
+			SELECT ?, ?, 0, ?, ?, ?
+			WHERE NOT EXISTS (SELECT 1 FROM users)
+		`, user.Username, user.Password, user.AutoTranscriptionEnabled, now, now)
+		if result.Error == nil {
+			if result.RowsAffected != 1 {
+				return ErrInitialUserExists
+			}
+			return r.db.WithContext(ctx).Where("username = ?", user.Username).First(user).Error
+		}
+		if !isTransientDatabaseLock(result.Error) {
+			return result.Error
+		}
+		if err := waitForDatabaseRetry(ctx, attempt); err != nil {
+			return err
+		}
+	}
+	return fmt.Errorf("create initial administrator: database remained busy")
+}
+
+func (r *userRepository) UpdatePasswordAndRevokeSessions(ctx context.Context, userID uint, hashedPassword string) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&models.User{}).Where("id = ?", userID).Updates(map[string]interface{}{
+			"password":      hashedPassword,
+			"token_version": gorm.Expr("token_version + 1"),
+		})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return gorm.ErrRecordNotFound
+		}
+
+		now := time.Now()
+		return tx.Model(&models.RefreshToken{}).
+			Where("user_id = ? AND revoked = ?", userID, false).
+			Updates(map[string]interface{}{"revoked": true, "revoked_at": &now}).Error
+	})
 }
 
 // JobRepository handles transcription job operations
@@ -115,16 +172,7 @@ func (r *jobRepository) ListWithParams(ctx context.Context, offset, limit int, s
 		return nil, 0, err
 	}
 
-	// Apply sorting
-	if sortBy != "" {
-		if sortOrder == "" {
-			sortOrder = "desc"
-		}
-		db = db.Order(sortBy + " " + sortOrder)
-	} else {
-		// Default sort
-		db = db.Order("created_at desc")
-	}
+	db = db.Order(normalizeJobListSort(sortBy, sortOrder))
 
 	// Apply pagination
 	err := db.Offset(offset).Limit(limit).Find(&jobs).Error
@@ -133,6 +181,30 @@ func (r *jobRepository) ListWithParams(ctx context.Context, offset, limit int, s
 	}
 
 	return jobs, count, nil
+}
+
+func normalizeJobListSort(sortBy, sortOrder string) string {
+	columns := map[string]string{
+		"":           "created_at",
+		"id":         "id",
+		"title":      "title",
+		"status":     "status",
+		"audio_path": "audio_path",
+		"created_at": "created_at",
+		"updated_at": "updated_at",
+	}
+
+	column, ok := columns[strings.ToLower(strings.TrimSpace(sortBy))]
+	if !ok {
+		column = columns[""]
+	}
+
+	direction := strings.ToLower(strings.TrimSpace(sortOrder))
+	if direction != "asc" && direction != "desc" {
+		direction = "desc"
+	}
+
+	return column + " " + direction
 }
 
 func (r *jobRepository) ListByUser(ctx context.Context, userID uint, offset, limit int) ([]models.TranscriptionJob, int64, error) {
@@ -659,6 +731,8 @@ type RefreshTokenRepository interface {
 	FindByHash(ctx context.Context, hash string) (*models.RefreshToken, error)
 	Revoke(ctx context.Context, id uint) error
 	RevokeByHash(ctx context.Context, hash string) error
+	Rotate(ctx context.Context, currentHash string, replacement *models.RefreshToken, now time.Time) (uint, error)
+	RevokeAllForUser(ctx context.Context, userID uint) error
 }
 
 type refreshTokenRepository struct {
@@ -670,6 +744,9 @@ func NewRefreshTokenRepository(db *gorm.DB) RefreshTokenRepository {
 }
 
 func (r *refreshTokenRepository) Create(ctx context.Context, token *models.RefreshToken) error {
+	if token.FamilyID == "" {
+		token.FamilyID = uuid.NewString()
+	}
 	return r.db.WithContext(ctx).Create(token).Error
 }
 
@@ -683,9 +760,113 @@ func (r *refreshTokenRepository) FindByHash(ctx context.Context, hash string) (*
 }
 
 func (r *refreshTokenRepository) Revoke(ctx context.Context, id uint) error {
-	return r.db.WithContext(ctx).Model(&models.RefreshToken{}).Where("id = ?", id).Update("revoked", true).Error
+	now := time.Now()
+	return r.db.WithContext(ctx).Model(&models.RefreshToken{}).Where("id = ?", id).
+		Updates(map[string]interface{}{"revoked": true, "revoked_at": &now}).Error
 }
 
 func (r *refreshTokenRepository) RevokeByHash(ctx context.Context, hash string) error {
-	return r.db.WithContext(ctx).Model(&models.RefreshToken{}).Where("hashed = ?", hash).Update("revoked", true).Error
+	now := time.Now()
+	return r.db.WithContext(ctx).Model(&models.RefreshToken{}).Where("hashed = ?", hash).
+		Updates(map[string]interface{}{"revoked": true, "revoked_at": &now}).Error
+}
+
+func (r *refreshTokenRepository) Rotate(ctx context.Context, currentHash string, replacement *models.RefreshToken, now time.Time) (uint, error) {
+	var lastErr error
+	for attempt := 0; attempt < 4; attempt++ {
+		var userID uint
+		replayed := false
+		candidate := *replacement
+		candidate.ID = 0
+		err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			var current models.RefreshToken
+			if err := tx.Where("hashed = ?", currentHash).First(&current).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return ErrRefreshTokenInvalid
+				}
+				return err
+			}
+
+			familyID := current.FamilyID
+			if familyID == "" {
+				familyID = uuid.NewString()
+			}
+			if current.Revoked {
+				replayed = true
+				return tx.Model(&models.RefreshToken{}).Where("family_id = ? OR id = ?", familyID, current.ID).
+					Updates(map[string]interface{}{"revoked": true, "revoked_at": &now, "family_id": familyID}).Error
+			}
+			if !current.ExpiresAt.After(now) {
+				return ErrRefreshTokenInvalid
+			}
+
+			result := tx.Model(&models.RefreshToken{}).
+				Where("id = ? AND revoked = ?", current.ID, false).
+				Updates(map[string]interface{}{
+					"revoked":          true,
+					"revoked_at":       &now,
+					"replaced_by_hash": candidate.Hashed,
+					"family_id":        familyID,
+				})
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected != 1 {
+				replayed = true
+				return tx.Model(&models.RefreshToken{}).Where("family_id = ?", familyID).
+					Updates(map[string]interface{}{"revoked": true, "revoked_at": &now}).Error
+			}
+
+			candidate.UserID = current.UserID
+			candidate.FamilyID = familyID
+			if err := tx.Create(&candidate).Error; err != nil {
+				return err
+			}
+			userID = current.UserID
+			return nil
+		})
+		if err == nil {
+			if replayed {
+				return 0, ErrRefreshTokenReplay
+			}
+			*replacement = candidate
+			return userID, nil
+		}
+		if !isTransientDatabaseLock(err) {
+			return 0, err
+		}
+		lastErr = err
+		if err := waitForDatabaseRetry(ctx, attempt); err != nil {
+			return 0, err
+		}
+	}
+	return 0, fmt.Errorf("rotate refresh token after database contention: %w", lastErr)
+}
+
+func isTransientDatabaseLock(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "database is locked") ||
+		strings.Contains(message, "database table is locked") ||
+		strings.Contains(message, "sqlite_busy")
+}
+
+func waitForDatabaseRetry(ctx context.Context, attempt int) error {
+	timer := time.NewTimer(time.Duration(attempt+1) * 10 * time.Millisecond)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func (r *refreshTokenRepository) RevokeAllForUser(ctx context.Context, userID uint) error {
+	now := time.Now()
+	return r.db.WithContext(ctx).Model(&models.RefreshToken{}).
+		Where("user_id = ? AND revoked = ?", userID, false).
+		Updates(map[string]interface{}{"revoked": true, "revoked_at": &now}).Error
 }

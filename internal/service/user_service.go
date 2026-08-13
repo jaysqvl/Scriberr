@@ -51,7 +51,7 @@ func (s *userService) Register(ctx context.Context, username, password string) (
 		Password: hashedPassword,
 	}
 
-	if err := s.userRepo.Create(ctx, user); err != nil {
+	if err := s.userRepo.CreateInitialAdmin(ctx, user); err != nil {
 		return nil, err
 	}
 
@@ -94,8 +94,7 @@ func (s *userService) ChangePassword(ctx context.Context, userID uint, currentPa
 		return err
 	}
 
-	user.Password = hashedPassword
-	return s.userRepo.Update(ctx, user)
+	return s.userRepo.UpdatePasswordAndRevokeSessions(ctx, user.ID, hashedPassword)
 }
 
 func (s *userService) ChangeUsername(ctx context.Context, userID uint, newUsername, password string) error {

@@ -13,18 +13,21 @@ export function CLIAuthConfirmation() {
     const [user, setUser] = useState<{ id: number; username: string } | null>(null)
     const [processing, setProcessing] = useState(false)
 
-    const callbackUrl = searchParams.get('callback_url')
-    const deviceName = searchParams.get('device_name') || 'CLI Device'
+    const state = searchParams.get('state')
+    const [deviceName, setDeviceName] = useState('CLI Device')
+    const [destination, setDestination] = useState('localhost')
 
     useEffect(() => {
         const checkSession = async () => {
             try {
-                const res = await fetch('/api/v1/auth/cli/authorize', {
+                const res = await fetch(`/api/v1/auth/cli/authorize?state=${encodeURIComponent(state || '')}`, {
                     headers: getAuthHeaders(),
                 })
                 if (res.ok) {
                     const data = await res.json()
                     setUser(data.user)
+                    setDeviceName(data.device_name)
+                    setDestination(data.destination)
                 } else {
                     setError('You must be logged in to authorize the CLI.')
                 }
@@ -35,14 +38,14 @@ export function CLIAuthConfirmation() {
             }
         }
 
-        if (!callbackUrl) {
-            setError('Invalid request: Missing callback URL.')
+        if (!state) {
+            setError('Invalid or expired CLI authorization request.')
             setLoading(false)
             return
         }
 
         checkSession()
-    }, [callbackUrl, getAuthHeaders])
+    }, [state, getAuthHeaders])
 
     const handleApprove = async () => {
         setProcessing(true)
@@ -54,8 +57,7 @@ export function CLIAuthConfirmation() {
                     ...getAuthHeaders(),
                 },
                 body: JSON.stringify({
-                    callback_url: callbackUrl,
-                    device_name: deviceName,
+                    state,
                 }),
             })
 
@@ -120,7 +122,7 @@ export function CLIAuthConfirmation() {
                     </h1>
 
                     <p className="text-[var(--text-secondary)] mb-6">
-                        <span className="font-bold">{deviceName}</span> wants to access your account <span className="font-bold">{user?.username}</span>.
+                        <span className="font-bold">{deviceName}</span> wants to access your account <span className="font-bold">{user?.username}</span> and return approval to <span className="font-bold">{destination}</span>.
                     </p>
 
                     <div className="flex flex-col gap-3">
@@ -146,4 +148,3 @@ export function CLIAuthConfirmation() {
         </Layout>
     )
 }
-

@@ -49,12 +49,11 @@ func (s *OllamaService) GetModels(ctx context.Context) ([]string, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("API error: %d - %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("API error: %d", resp.StatusCode)
 	}
 
 	var tags ollamaTagsResponse
-	if err := json.NewDecoder(resp.Body).Decode(&tags); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxProviderResponseBytes)).Decode(&tags); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 
@@ -119,11 +118,10 @@ func (s *OllamaService) ChatCompletion(ctx context.Context, model string, messag
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("API error: %d - %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("API error: %d", resp.StatusCode)
 	}
 	var oResp ollamaChatResponse
-	if err := json.NewDecoder(resp.Body).Decode(&oResp); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxProviderResponseBytes)).Decode(&oResp); err != nil {
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
 	// Map to generic ChatResponse
@@ -173,13 +171,6 @@ func (s *OllamaService) ChatCompletionStream(ctx context.Context, model string, 
 		}
 		req.Header.Set("Content-Type", "application/json")
 
-		// Debug log the request body
-		if len(data) < 2000 {
-			fmt.Printf("Debug: Ollama request body: %s\n", string(data))
-		} else {
-			fmt.Printf("Debug: Ollama request body (truncated): %s...\n", string(data[:2000]))
-		}
-
 		resp, err := s.client.Do(req)
 		if err != nil {
 			errorChan <- fmt.Errorf("failed to make request: %w", err)
@@ -187,12 +178,13 @@ func (s *OllamaService) ChatCompletionStream(ctx context.Context, model string, 
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
-			body, _ := io.ReadAll(resp.Body)
-			errorChan <- fmt.Errorf("API error: %d - %s", resp.StatusCode, string(body))
+			errorChan <- fmt.Errorf("API error: %d", resp.StatusCode)
 			return
 		}
 
-		scanner := bufio.NewScanner(resp.Body)
+		limitedBody := &io.LimitedReader{R: resp.Body, N: maxProviderResponseBytes + 1}
+		scanner := bufio.NewScanner(limitedBody)
+		scanner.Buffer(make([]byte, 64*1024), maxProviderStreamLine)
 		for scanner.Scan() {
 			if ctx.Err() != nil {
 				return
@@ -219,6 +211,8 @@ func (s *OllamaService) ChatCompletionStream(ctx context.Context, model string, 
 		}
 		if err := scanner.Err(); err != nil {
 			errorChan <- fmt.Errorf("error reading stream: %w", err)
+		} else if limitedBody.N <= 0 {
+			errorChan <- fmt.Errorf("provider response exceeded size limit")
 		}
 	}()
 
@@ -269,7 +263,7 @@ func (s *OllamaService) GetContextWindow(ctx context.Context, model string) (int
 	}
 
 	var showResp ollamaShowResponse
-	if err := json.NewDecoder(resp.Body).Decode(&showResp); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxProviderResponseBytes)).Decode(&showResp); err != nil {
 		return defaultContext, nil
 	}
 

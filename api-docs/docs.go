@@ -990,9 +990,6 @@ const docTemplate = `{
             "post": {
                 "security": [
                     {
-                        "ApiKeyAuth": []
-                    },
-                    {
                         "BearerAuth": []
                     }
                 ],
@@ -4269,13 +4266,16 @@ const docTemplate = `{
             ],
             "properties": {
                 "confirmPassword": {
-                    "type": "string"
+                    "type": "string",
+                    "maxLength": 1024
                 },
                 "currentPassword": {
-                    "type": "string"
+                    "type": "string",
+                    "maxLength": 1024
                 },
                 "newPassword": {
                     "type": "string",
+                    "maxLength": 1024,
                     "minLength": 6
                 }
             }
@@ -4293,7 +4293,8 @@ const docTemplate = `{
                     "minLength": 3
                 },
                 "password": {
-                    "type": "string"
+                    "type": "string",
+                    "maxLength": 1024
                 }
             }
         },
@@ -4542,10 +4543,13 @@ const docTemplate = `{
             ],
             "properties": {
                 "password": {
-                    "type": "string"
+                    "type": "string",
+                    "maxLength": 1024
                 },
                 "username": {
-                    "type": "string"
+                    "type": "string",
+                    "maxLength": 50,
+                    "minLength": 1
                 }
             }
         },
@@ -4631,10 +4635,12 @@ const docTemplate = `{
             ],
             "properties": {
                 "confirmPassword": {
-                    "type": "string"
+                    "type": "string",
+                    "maxLength": 1024
                 },
                 "password": {
                     "type": "string",
+                    "maxLength": 1024,
                     "minLength": 6
                 },
                 "username": {
@@ -4800,7 +4806,8 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "api_key": {
-                    "type": "string"
+                    "type": "string",
+                    "maxLength": 8192
                 }
             }
         },
@@ -4811,10 +4818,12 @@ const docTemplate = `{
             ],
             "properties": {
                 "title": {
-                    "type": "string"
+                    "type": "string",
+                    "maxLength": 500
                 },
                 "url": {
-                    "type": "string"
+                    "type": "string",
+                    "maxLength": 2048
                 }
             }
         },

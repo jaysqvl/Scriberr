@@ -1,6 +1,7 @@
 package models
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/google/uuid"
@@ -140,6 +141,31 @@ type WhisperXParams struct {
 	MaxNewTokens *int `json:"max_new_tokens,omitempty" gorm:"type:int"`
 }
 
+// WithoutSecrets returns a copy suitable for execution history and other
+// non-secret persistence. Jobs and profiles may still retain write-only
+// credentials needed for future runs.
+func (p WhisperXParams) WithoutSecrets() WhisperXParams {
+	p.HfToken = nil
+	p.APIKey = nil
+	return p
+}
+
+// MarshalJSON keeps provider credentials write-only wherever transcription
+// parameters are nested in API responses.
+func (p WhisperXParams) MarshalJSON() ([]byte, error) {
+	type publicParams WhisperXParams
+
+	return json.Marshal(struct {
+		publicParams
+		HasHFToken bool `json:"has_hf_token"`
+		HasAPIKey  bool `json:"has_api_key"`
+	}{
+		publicParams: publicParams(p.WithoutSecrets()),
+		HasHFToken:   p.HfToken != nil && *p.HfToken != "",
+		HasAPIKey:    p.APIKey != nil && *p.APIKey != "",
+	})
+}
+
 // BeforeCreate sets the ID if not already set
 func (tj *TranscriptionJob) BeforeCreate(tx *gorm.DB) error {
 	if tj.ID == "" {
@@ -153,6 +179,7 @@ type User struct {
 	ID                       uint      `json:"id" gorm:"primaryKey"`
 	Username                 string    `json:"username" gorm:"uniqueIndex;not null;type:varchar(50)"`
 	Password                 string    `json:"-" gorm:"not null;type:varchar(255)"`
+	TokenVersion             uint64    `json:"-" gorm:"not null;default:0"`
 	DefaultProfileID         *string   `json:"default_profile_id,omitempty" gorm:"type:varchar(36)"`
 	AutoTranscriptionEnabled bool      `json:"auto_transcription_enabled" gorm:"not null;default:false"`
 	CreatedAt                time.Time `json:"created_at" gorm:"autoCreateTime"`

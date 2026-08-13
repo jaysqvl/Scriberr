@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"scriberr/internal/models"
+	"scriberr/internal/netpolicy"
 	"scriberr/pkg/logger"
 )
 
@@ -26,14 +27,27 @@ type WebhookPayload struct {
 
 // Service handles webhook operations
 type Service struct {
-	client *http.Client
+	client      *http.Client
+	validateURL func(string) error
 }
 
 // NewService creates a new webhook service
 func NewService() *Service {
 	return &Service{
-		client: &http.Client{
-			Timeout: 10 * time.Second,
+		client: netpolicy.NewPublicHTTPClient(10 * time.Second),
+		validateURL: func(rawURL string) error {
+			_, err := netpolicy.ValidatePublicURL(rawURL, true)
+			return err
+		},
+	}
+}
+
+func newServiceWithClient(client *http.Client) *Service {
+	return &Service{
+		client: client,
+		validateURL: func(rawURL string) error {
+			_, err := http.NewRequest(http.MethodPost, rawURL, nil)
+			return err
 		},
 	}
 }
@@ -43,6 +57,9 @@ func (s *Service) SendWebhook(ctx context.Context, url string, payload WebhookPa
 	if url == "" {
 		return nil
 	}
+	if err := s.validateURL(url); err != nil {
+		return fmt.Errorf("webhook destination rejected: %w", err)
+	}
 
 	logger.Info("Sending webhook", "job_id", payload.JobID, "url", url, "status", payload.Status)
 
@@ -51,15 +68,6 @@ func (s *Service) SendWebhook(ctx context.Context, url string, payload WebhookPa
 	if err != nil {
 		return fmt.Errorf("failed to marshal webhook payload: %w", err)
 	}
-
-	// Create request
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(jsonData))
-	if err != nil {
-		return fmt.Errorf("failed to create webhook request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "Scriberr-Webhook/1.0")
 
 	// Send request with retry logic
 	maxRetries := 3
@@ -71,13 +79,20 @@ func (s *Service) SendWebhook(ctx context.Context, url string, payload WebhookPa
 			logger.Info("Retrying webhook", "job_id", payload.JobID, "attempt", i+1)
 		}
 
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(jsonData))
+		if err != nil {
+			return fmt.Errorf("failed to create webhook request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("User-Agent", "Scriberr-Webhook/1.0")
+
 		resp, err := s.client.Do(req)
 		if err != nil {
 			lastErr = err
 			logger.Warn("Webhook request failed", "error", err, "attempt", i+1)
 			continue
 		}
-		defer resp.Body.Close()
+		_ = resp.Body.Close()
 
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			logger.Info("Webhook sent successfully", "job_id", payload.JobID, "status_code", resp.StatusCode)

@@ -90,7 +90,7 @@ func (h *Handler) CreateNote(c *gin.Context) {
 	}
 
 	var req NoteCreateRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := bindJSON(c, &req); err != nil {
 		log.Printf("notes.CreateNote: invalid payload for transcription %s: %v", transcriptionID, err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid payload", "details": err.Error()})
 		return
@@ -186,7 +186,7 @@ func (h *Handler) GetNote(c *gin.Context) {
 func (h *Handler) UpdateNote(c *gin.Context) {
 	noteID := c.Param("note_id")
 	var req NoteUpdateRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := bindJSON(c, &req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}

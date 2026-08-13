@@ -1,6 +1,8 @@
 package middleware
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 	"strings"
 	"time"
@@ -51,7 +53,7 @@ func AuthMiddleware(authService *auth.AuthService) gin.HandlerFunc {
 		}
 
 		claims, err := authService.ValidateToken(token)
-		if err != nil {
+		if err != nil || !tokenIsCurrent(token, claims) {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token"})
 			c.Abort()
 			return
@@ -121,7 +123,7 @@ func JWTOnlyMiddleware(authService *auth.AuthService) gin.HandlerFunc {
 
 		token := parts[1]
 		claims, err := authService.ValidateToken(token)
-		if err != nil {
+		if err != nil || !tokenIsCurrent(token, claims) {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token"})
 			c.Abort()
 			return
@@ -132,4 +134,27 @@ func JWTOnlyMiddleware(authService *auth.AuthService) gin.HandlerFunc {
 		c.Set("username", claims.Username)
 		c.Next()
 	}
+}
+
+func tokenIsCurrent(rawToken string, claims *auth.Claims) bool {
+	if claims == nil || database.DB == nil {
+		return false
+	}
+
+	var user models.User
+	if err := database.DB.Select("id", "token_version").Where("id = ?", claims.UserID).First(&user).Error; err != nil {
+		return false
+	}
+	if user.TokenVersion != claims.TokenVersion {
+		return false
+	}
+
+	digest := sha256.Sum256([]byte(rawToken))
+	var count int64
+	if err := database.DB.Model(&models.RevokedAccessToken{}).
+		Where("token_hash = ? AND expires_at > ?", hex.EncodeToString(digest[:]), time.Now()).
+		Count(&count).Error; err != nil {
+		return false
+	}
+	return count == 0
 }

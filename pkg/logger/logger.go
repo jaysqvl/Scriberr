@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -88,6 +89,11 @@ func Init(level string) {
 					a.Value = slog.StringValue("ERROR")
 				}
 			}
+			if isSensitiveLogKey(a.Key) {
+				a.Value = slog.StringValue("[REDACTED]")
+			} else if (a.Key == "url" || a.Key == "path") && a.Value.Kind() == slog.KindString {
+				a.Value = slog.StringValue(RedactURL(a.Value.String()))
+			}
 			return a
 		},
 	}
@@ -114,31 +120,31 @@ func GetLevel() LogLevel {
 
 func Debug(msg string, args ...any) {
 	if currentLevel <= LevelDebug {
-		Get().Debug(msg, args...)
+		Get().Debug(msg, sanitizeLogArgs(args)...)
 	}
 }
 
 func Info(msg string, args ...any) {
 	if currentLevel <= LevelInfo {
-		Get().Info(msg, args...)
+		Get().Info(msg, sanitizeLogArgs(args)...)
 	}
 }
 
 func Warn(msg string, args ...any) {
 	if currentLevel <= LevelWarn {
-		Get().Warn(msg, args...)
+		Get().Warn(msg, sanitizeLogArgs(args)...)
 	}
 }
 
 func Error(msg string, args ...any) {
 	if currentLevel <= LevelError {
-		Get().Error(msg, args...)
+		Get().Error(msg, sanitizeLogArgs(args)...)
 	}
 }
 
 // WithContext creates a logger with additional context
 func WithContext(key string, value any) *Logger {
-	return &Logger{Get().With(key, value)}
+	return &Logger{Get().With(key, sanitizeLogValue(key, value))}
 }
 
 // Startup logging for key initialization steps
@@ -169,8 +175,7 @@ func JobCompleted(jobID string, duration time.Duration, result any) {
 	Info("Transcription completed", "duration", duration.String())
 	Debug("Job completed with details",
 		"job_id", jobID,
-		"duration", duration.String(),
-		"result", result)
+		"duration", duration.String())
 }
 
 func JobFailed(jobID string, duration time.Duration, err error) {
@@ -252,7 +257,7 @@ func GinLogger() gin.HandlerFunc {
 
 		// Build path with query string
 		if raw != "" {
-			path = path + "?" + raw
+			path = RedactURL(path + "?" + raw)
 		}
 
 		// Format log message based on level
@@ -291,6 +296,79 @@ func GinLogger() gin.HandlerFunc {
 				fmt.Sprintf("%.2fms", float64(duration.Nanoseconds())/1e6))
 		}
 	}
+}
+
+func sanitizeLogArgs(args []any) []any {
+	clean := append([]any(nil), args...)
+	for i := 0; i+1 < len(clean); i += 2 {
+		key, ok := clean[i].(string)
+		if !ok {
+			continue
+		}
+		clean[i+1] = sanitizeLogValue(key, clean[i+1])
+	}
+	return clean
+}
+
+func sanitizeLogValue(key string, value any) any {
+	if isSensitiveLogKey(key) {
+		return "[REDACTED]"
+	}
+	if key == "url" || key == "path" {
+		if text, ok := value.(string); ok {
+			return RedactURL(text)
+		}
+	}
+
+	switch typed := value.(type) {
+	case map[string]any:
+		clean := make(map[string]any, len(typed))
+		for nestedKey, nestedValue := range typed {
+			clean[nestedKey] = sanitizeLogValue(nestedKey, nestedValue)
+		}
+		return clean
+	case map[string]string:
+		clean := make(map[string]string, len(typed))
+		for nestedKey, nestedValue := range typed {
+			clean[nestedKey] = fmt.Sprint(sanitizeLogValue(nestedKey, nestedValue))
+		}
+		return clean
+	case []any:
+		clean := make([]any, len(typed))
+		for index, nestedValue := range typed {
+			clean[index] = sanitizeLogValue("", nestedValue)
+		}
+		return clean
+	default:
+		return value
+	}
+}
+
+func isSensitiveLogKey(key string) bool {
+	normalized := strings.ToLower(strings.ReplaceAll(key, "-", "_"))
+	switch normalized {
+	case "token", "access_token", "refresh_token", "hf_token", "api_key", "apikey",
+		"password", "secret", "authorization", "cookie", "set_cookie", "code_verifier":
+		return true
+	default:
+		return strings.HasSuffix(normalized, "_password") || strings.HasSuffix(normalized, "_secret")
+	}
+}
+
+// RedactURL removes credentials from query strings before a request target is
+// sent to application logs.
+func RedactURL(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		if index := strings.IndexByte(rawURL, '?'); index >= 0 {
+			return rawURL[:index] + "?[REDACTED]"
+		}
+		return rawURL
+	}
+	if parsed.RawQuery != "" {
+		parsed.RawQuery = "redacted"
+	}
+	return parsed.String()
 }
 
 // getStatusColor returns ANSI color codes for HTTP status codes

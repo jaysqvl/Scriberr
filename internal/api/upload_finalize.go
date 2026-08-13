@@ -8,7 +8,6 @@ import (
 	"mime/multipart"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -131,7 +130,7 @@ func (h *Handler) respondWithCompletedUpload(c *gin.Context, session *models.Upl
 }
 
 func (h *Handler) createUploadedAudioJob(c *gin.Context, filePath, title string) (*models.TranscriptionJob, error) {
-	finalPath, err := h.convertWebMToMP3IfNeeded(filePath)
+	finalPath, err := h.convertWebMToMP3IfNeeded(c.Request.Context(), filePath)
 	if err != nil {
 		_ = h.fileService.RemoveFile(filePath)
 		return nil, err
@@ -160,8 +159,7 @@ func (h *Handler) createUploadedVideoJob(c *gin.Context, videoPath, title string
 	jobID := filenameWithoutExt(videoPath)
 	audioPath := strings.TrimSuffix(videoPath, filepath.Ext(videoPath)) + ".mp3"
 
-	cmd := exec.Command("ffmpeg", "-i", videoPath, "-vn", "-acodec", "libmp3lame", "-q:a", "2", audioPath)
-	if err := cmd.Run(); err != nil {
+	if err := h.runMediaCommand(c.Request.Context(), "ffmpeg", "-i", videoPath, "-vn", "-acodec", "libmp3lame", "-q:a", "2", audioPath); err != nil {
 		_ = h.fileService.RemoveFile(videoPath)
 		return nil, fmt.Errorf("Failed to extract audio from video")
 	}
@@ -378,14 +376,13 @@ func (h *Handler) applyAutoTranscription(c *gin.Context, job *models.Transcripti
 	}
 }
 
-func (h *Handler) convertWebMToMP3IfNeeded(filePath string) (string, error) {
+func (h *Handler) convertWebMToMP3IfNeeded(ctx context.Context, filePath string) (string, error) {
 	if strings.ToLower(filepath.Ext(filePath)) != ".webm" {
 		return filePath, nil
 	}
 
 	mp3Path := strings.TrimSuffix(filePath, filepath.Ext(filePath)) + ".mp3"
-	cmd := exec.Command("ffmpeg", "-i", filePath, "-vn", "-af", "loudnorm", "-acodec", "libmp3lame", "-b:a", "320k", mp3Path)
-	if err := cmd.Run(); err != nil {
+	if err := h.runMediaCommand(ctx, "ffmpeg", "-i", filePath, "-vn", "-af", "loudnorm", "-acodec", "libmp3lame", "-b:a", "320k", mp3Path); err != nil {
 		return "", fmt.Errorf("Failed to convert WebM audio to MP3")
 	}
 	_ = h.fileService.RemoveFile(filePath)
@@ -418,7 +415,7 @@ func (h *Handler) createQuickTranscriptionFromPath(path, filename string, params
 
 	job, err := h.quickTranscription.SubmitQuickJob(file, filename, params)
 	if err != nil {
-		return nil, fmt.Errorf("Failed to submit quick transcription: %v", err)
+		return nil, fmt.Errorf("Failed to submit quick transcription: %w", err)
 	}
 	return job, nil
 }

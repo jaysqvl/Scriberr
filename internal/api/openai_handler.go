@@ -3,16 +3,19 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
+
+	"scriberr/internal/netpolicy"
 
 	"github.com/gin-gonic/gin"
 )
 
 // ValidateOpenAIKeyRequest represents the request to validate an OpenAI API key
 type ValidateOpenAIKeyRequest struct {
-	APIKey string `json:"api_key"`
+	APIKey string `json:"api_key" binding:"max=8192"`
 }
 
 // OpenAIModel represents a model returned by OpenAI API
@@ -41,10 +44,13 @@ type OpenAIModelListResponse struct {
 // @Failure 401 {object} map[string]string
 // @Failure 500 {object} map[string]string
 // @Router /api/v1/config/openai/validate [post]
-// @Security ApiKeyAuth
 // @Security BearerAuth
 func (h *Handler) ValidateOpenAIKey(c *gin.Context) {
 	var req ValidateOpenAIKeyRequest
+	if err := bindLimitedJSON(c, &req, maxAuthBodyBytes); err != nil {
+		c.JSON(requestBodyErrorStatus(err), gin.H{"error": "Invalid request"})
+		return
+	}
 	// If API key is not provided in request, try to use the one from config
 	apiKey := req.APIKey
 	if apiKey == "" {
@@ -57,9 +63,7 @@ func (h *Handler) ValidateOpenAIKey(c *gin.Context) {
 	}
 
 	// Create request to OpenAI models endpoint
-	client := &http.Client{
-		Timeout: 10 * time.Second,
-	}
+	client := netpolicy.NewPublicHTTPClient(10 * time.Second)
 
 	request, err := http.NewRequest("GET", "https://api.openai.com/v1/models", nil)
 	if err != nil {
@@ -88,7 +92,7 @@ func (h *Handler) ValidateOpenAIKey(c *gin.Context) {
 
 	// Parse response
 	var modelList OpenAIModelListResponse
-	if err := json.NewDecoder(response.Body).Decode(&modelList); err != nil {
+	if err := json.NewDecoder(io.LimitReader(response.Body, 4*1024*1024)).Decode(&modelList); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to parse OpenAI response"})
 		return
 	}

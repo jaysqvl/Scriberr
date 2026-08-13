@@ -464,23 +464,6 @@ func (mt *MultiTrackTranscriber) mergeTrackTranscripts(trackTranscripts []TrackT
 
 	logger.Info("Sorted all words chronologically")
 
-	// Log the chronologically sorted words for debugging
-	logger.Info("=== CHRONOLOGICALLY SORTED WORDS ===")
-	for i, word := range allWords {
-		speakerName := "unknown"
-		if word.Speaker != nil {
-			speakerName = *word.Speaker
-		}
-		logger.Info("Sorted Word",
-			"index", i+1,
-			"start", word.Start,
-			"end", word.End,
-			"word", word.Word,
-			"speaker", speakerName,
-			"score", word.Score)
-	}
-	logger.Info("=== END SORTED WORDS ===", "total_words", len(allWords))
-
 	// Phase 3: Group consecutive words from same speaker into turns
 	speakerTurns := mt.createSpeakerTurns(allWords)
 
@@ -577,8 +560,7 @@ func (mt *MultiTrackTranscriber) createSpeakerTurns(sortedWords []interfaces.Wor
 					"speaker", *currentSpeaker,
 					"word_count", len(currentTurnWords),
 					"start", turn.Start,
-					"end", turn.End,
-					"text", turn.Text)
+					"end", turn.End)
 			}
 
 			// Start new turn
@@ -589,8 +571,7 @@ func (mt *MultiTrackTranscriber) createSpeakerTurns(sortedWords []interfaces.Wor
 				logger.Debug("Started new speaker turn",
 					"speaker", *word.Speaker,
 					"word_index", i,
-					"start_time", word.Start,
-					"word", word.Word)
+					"start_time", word.Start)
 			}
 		} else {
 			// Same speaker - continue current turn
@@ -606,8 +587,7 @@ func (mt *MultiTrackTranscriber) createSpeakerTurns(sortedWords []interfaces.Wor
 		if currentSpeaker != nil {
 			logger.Debug("Finalized final speaker turn",
 				"speaker", *currentSpeaker,
-				"word_count", len(currentTurnWords),
-				"text", turn.Text)
+				"word_count", len(currentTurnWords))
 		}
 	}
 
@@ -659,72 +639,12 @@ func (mt *MultiTrackTranscriber) logIndividualTranscript(fileName string, result
 		"total_segments", len(result.Segments),
 		"total_words", len(result.WordSegments))
 
-	// Log segment-level data
-	logger.Info("--- SEGMENTS (Original Timestamps) ---", "file", fileName)
-	for i, segment := range result.Segments {
-		logger.Info("Segment",
-			"file", fileName,
-			"index", i+1,
-			"start", segment.Start,
-			"end", segment.End,
-			"duration", segment.End-segment.Start,
-			"text", segment.Text)
-	}
-
-	// Log segment-level data with offset applied
-	logger.Info("--- SEGMENTS (With Offset Applied) ---", "file", fileName, "offset", offset)
-	for i, segment := range result.Segments {
-		adjustedStart := segment.Start + offset
-		adjustedEnd := segment.End + offset
-		logger.Info("Adjusted Segment",
-			"file", fileName,
-			"index", i+1,
-			"original_start", segment.Start,
-			"adjusted_start", adjustedStart,
-			"original_end", segment.End,
-			"adjusted_end", adjustedEnd,
-			"duration", segment.End-segment.Start,
-			"text", segment.Text)
-	}
-
-	// Log word-level data (original timestamps)
-	logger.Info("--- WORDS (Original Timestamps) ---", "file", fileName)
-	for i, word := range result.WordSegments {
-		logger.Debug("Word",
-			"file", fileName,
-			"index", i+1,
-			"word", word.Word,
-			"start", word.Start,
-			"end", word.End,
-			"duration", word.End-word.Start,
-			"score", word.Score)
-	}
-
-	// Log word-level data with offset applied
-	logger.Info("--- WORDS (With Offset Applied) ---", "file", fileName, "offset", offset)
-	for i, word := range result.WordSegments {
-		adjustedStart := word.Start + offset
-		adjustedEnd := word.End + offset
-		logger.Info("Adjusted Word",
-			"file", fileName,
-			"index", i+1,
-			"word", word.Word,
-			"original_start", word.Start,
-			"adjusted_start", adjustedStart,
-			"original_end", word.End,
-			"adjusted_end", adjustedEnd,
-			"duration", word.End-word.Start,
-			"score", word.Score,
-			"speaker", speaker)
-	}
-
-	// Log full text for this track
-	logger.Info("--- FULL TEXT ---",
+	logger.Debug("Individual transcript timing summary",
 		"file", fileName,
 		"speaker", speaker,
-		"text", result.Text)
-
-	logger.Info("=== END INDIVIDUAL TRANSCRIPT ===", "file", fileName)
+		"offset", offset,
+		"segments", len(result.Segments),
+		"words", len(result.WordSegments))
 }
 
 // createSpeakerMappings creates speaker mappings for multi-track transcription
@@ -790,7 +710,7 @@ func (mt *MultiTrackTranscriber) createMultiTrackExecutionRecord(
 		MergeEndTime:      &mergeEndTime,
 		MergeDuration:     &mergeDuration,
 
-		ActualParameters: parameters,
+		ActualParameters: parameters.WithoutSecrets(),
 		Status:           models.StatusCompleted,
 	}
 

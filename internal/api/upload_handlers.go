@@ -33,6 +33,7 @@ const (
 	maxUploadParametersBytes  = 64 * 1024
 	maxUploadFilenameLength   = 512
 	maxUploadContentTypeBytes = 255
+	maxUploadSessionBodyBytes = 1024 * 1024
 )
 
 type createUploadSessionRequest struct {
@@ -77,16 +78,49 @@ type uploadSessionFileStatus struct {
 
 // CreateUploadSession starts a resumable upload session.
 func (h *Handler) CreateUploadSession(c *gin.Context) {
-	h.cleanupExpiredUploadSessions()
-
 	var req createUploadSessionRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid upload session request"})
+	if err := bindLimitedJSON(c, &req, maxUploadSessionBodyBytes); err != nil {
+		c.JSON(requestBodyErrorStatus(err), gin.H{"error": "Invalid upload session request"})
 		return
 	}
 
-	if err := validateUploadSessionRequest(req, h.config.UploadChunkSizeBytes); err != nil {
+	if err := validateUploadSessionRequest(req, h.config.UploadChunkSizeBytes, h.maxUploadBytes()); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Serialize admission so concurrent callers cannot all observe capacity
+	// before any of their reservations are persisted.
+	h.resourceAdmission.sessionMu.Lock()
+	defer h.resourceAdmission.sessionMu.Unlock()
+	h.resourceAdmission.diskMu.Lock()
+	defer h.resourceAdmission.diskMu.Unlock()
+	h.cleanupExpiredUploadSessions()
+
+	maxActiveUploads := 8
+	if h.config.MaxActiveUploads > 0 {
+		maxActiveUploads = h.config.MaxActiveUploads
+	}
+	var activeUploads int64
+	if err := database.DB.Model(&models.UploadSession{}).
+		Where("status = ? AND expires_at > ?", models.UploadSessionActive, time.Now()).
+		Count(&activeUploads).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to check upload capacity"})
+		return
+	}
+	if activeUploads >= int64(maxActiveUploads) {
+		c.JSON(http.StatusTooManyRequests, gin.H{"error": "Too many active upload sessions"})
+		return
+	}
+
+	reservedBytes, err := h.activeResumableReservationBytes()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to check upload capacity"})
+		return
+	}
+	totalBytes := uploadSessionTotalBytes(req.Files)
+	if err := h.ensureUploadCapacity(h.config.TempDir, totalBytes*2, reservedBytes*2+h.resourceAdmission.reservedDisk); err != nil {
+		c.JSON(http.StatusInsufficientStorage, gin.H{"error": err.Error()})
 		return
 	}
 
@@ -224,12 +258,19 @@ func (h *Handler) UploadChunk(c *gin.Context) {
 		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "Chunk body is larger than expected"})
 		return
 	}
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, expectedSize)
 
 	chunkHash := strings.ToLower(strings.TrimSpace(c.GetHeader("X-Chunk-SHA256")))
 	if len(chunkHash) != sha256.Size*2 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "X-Chunk-SHA256 header is required"})
 		return
 	}
+	releaseUpload, err := h.resourceAdmission.tryAcquireUpload()
+	if err != nil {
+		c.JSON(http.StatusTooManyRequests, gin.H{"error": "Upload capacity is full"})
+		return
+	}
+	defer releaseUpload()
 
 	chunkPath := h.uploadChunkPath(session.ID, file.ID, index)
 	if existingOK, existingErr := existingChunkMatches(chunkPath, chunkHash, expectedSize); existingErr != nil {
@@ -269,6 +310,15 @@ func (h *Handler) UploadChunk(c *gin.Context) {
 
 // CompleteUploadSession assembles all files and creates the final Scriberr job.
 func (h *Handler) CompleteUploadSession(c *gin.Context) {
+	releaseUpload, err := h.resourceAdmission.tryAcquireUpload()
+	if err != nil {
+		c.JSON(http.StatusTooManyRequests, gin.H{"error": "Upload capacity is full"})
+		return
+	}
+	defer releaseUpload()
+	h.resourceAdmission.sessionMu.Lock()
+	defer h.resourceAdmission.sessionMu.Unlock()
+
 	session, err := h.loadUploadSession(c.Param("id"))
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Upload session not found"})
@@ -293,6 +343,14 @@ func (h *Handler) CompleteUploadSession(c *gin.Context) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("File %s is missing chunks", file.ID)})
 			return
 		}
+	}
+	totalBytes := int64(0)
+	for _, file := range session.Files {
+		totalBytes += file.Size
+	}
+	if err := h.ensureUploadCapacity(h.config.TempDir, totalBytes, 0); err != nil {
+		c.JSON(http.StatusInsufficientStorage, gin.H{"error": err.Error()})
+		return
 	}
 
 	assembledFiles := make([]assembledUploadFile, 0, len(session.Files))
@@ -333,6 +391,9 @@ func (h *Handler) CompleteUploadSession(c *gin.Context) {
 
 // CancelUploadSession cancels an active upload and removes staged chunks.
 func (h *Handler) CancelUploadSession(c *gin.Context) {
+	h.resourceAdmission.sessionMu.Lock()
+	defer h.resourceAdmission.sessionMu.Unlock()
+
 	session, err := h.loadUploadSession(c.Param("id"))
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Upload session not found"})
@@ -350,7 +411,7 @@ func (h *Handler) CancelUploadSession(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"cancelled": true})
 }
 
-func validateUploadSessionRequest(req createUploadSessionRequest, chunkSize int64) error {
+func validateUploadSessionRequest(req createUploadSessionRequest, chunkSize, maxUploadBytes int64) error {
 	switch req.Kind {
 	case models.UploadKindAudio, models.UploadKindVideo, models.UploadKindQuick, models.UploadKindMultiTrack, models.UploadKindSubmit:
 	default:
@@ -377,6 +438,7 @@ func validateUploadSessionRequest(req createUploadSessionRequest, chunkSize int6
 
 	roleCounts := map[models.UploadFileRole]int{}
 	seenIDs := map[string]bool{}
+	var totalBytes int64
 	for i, file := range req.Files {
 		switch file.Role {
 		case models.UploadFileRoleAudio, models.UploadFileRoleVideo, models.UploadFileRoleAup, models.UploadFileRoleTrack:
@@ -386,6 +448,10 @@ func validateUploadSessionRequest(req createUploadSessionRequest, chunkSize int6
 		if file.Size <= 0 {
 			return fmt.Errorf("File %d has invalid size", i)
 		}
+		if file.Size > maxUploadBytes || totalBytes > maxUploadBytes-file.Size {
+			return fmt.Errorf("Upload exceeds the configured size limit")
+		}
+		totalBytes += file.Size
 		if strings.TrimSpace(file.Name) == "" {
 			return fmt.Errorf("File %d is missing a name", i)
 		}
@@ -425,6 +491,14 @@ func validateUploadSessionRequest(req createUploadSessionRequest, chunkSize int6
 		}
 	}
 	return nil
+}
+
+func uploadSessionTotalBytes(files []uploadSessionFileInput) int64 {
+	var total int64
+	for _, file := range files {
+		total += file.Size
+	}
+	return total
 }
 
 func (h *Handler) loadUploadSession(id string) (*models.UploadSession, error) {

@@ -1,9 +1,12 @@
 package tests
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -118,9 +121,12 @@ func (suite *CLIHandlerTestSuite) makeAuthenticatedRequest(method, path string, 
 }
 
 func (suite *CLIHandlerTestSuite) TestAuthorizeCLI() {
+	state, _ := suite.startCLIAuthorization("http://127.0.0.1:12345/callback")
 	// Test GET /api/v1/auth/cli/authorize
-	w := suite.makeAuthenticatedRequest("GET", "/api/v1/auth/cli/authorize", nil)
+	w := suite.makeAuthenticatedRequest("GET", "/api/v1/auth/cli/authorize?state="+url.QueryEscape(state), nil)
 	assert.Equal(suite.T(), 200, w.Code)
+	assert.Equal(suite.T(), "DENY", w.Header().Get("X-Frame-Options"))
+	assert.Contains(suite.T(), w.Header().Get("Content-Security-Policy"), "frame-ancestors 'none'")
 
 	var response map[string]interface{}
 	err := json.Unmarshal(w.Body.Bytes(), &response)
@@ -132,13 +138,9 @@ func (suite *CLIHandlerTestSuite) TestAuthorizeCLI() {
 }
 
 func (suite *CLIHandlerTestSuite) TestConfirmCLIAuthorization() {
-	// Test POST /api/v1/auth/cli/authorize
-	body := map[string]string{
-		"callback_url": "http://localhost:12345",
-		"device_name":  "Test Device",
-	}
+	state, verifier := suite.startCLIAuthorization("http://127.0.0.1:12345/callback")
 
-	w := suite.makeAuthenticatedRequest("POST", "/api/v1/auth/cli/authorize", body)
+	w := suite.makeAuthenticatedRequest("POST", "/api/v1/auth/cli/authorize", map[string]string{"state": state})
 	assert.Equal(suite.T(), 200, w.Code)
 
 	var response map[string]interface{}
@@ -146,9 +148,57 @@ func (suite *CLIHandlerTestSuite) TestConfirmCLIAuthorization() {
 	assert.NoError(suite.T(), err)
 
 	redirectURL := response["redirect_url"].(string)
-	assert.Contains(suite.T(), redirectURL, "http://localhost:12345")
-	assert.Contains(suite.T(), redirectURL, "token=")
-	assert.Contains(suite.T(), redirectURL, "username="+suite.helper.TestUser.Username)
+	parsed, err := url.Parse(redirectURL)
+	assert.NoError(suite.T(), err)
+	assert.Equal(suite.T(), "127.0.0.1:12345", parsed.Host)
+	assert.Empty(suite.T(), parsed.Query().Get("token"))
+	assert.NotEmpty(suite.T(), parsed.Query().Get("code"))
+	assert.Equal(suite.T(), state, parsed.Query().Get("state"))
+
+	redeemBody := map[string]string{
+		"state":         state,
+		"code":          parsed.Query().Get("code"),
+		"code_verifier": verifier,
+	}
+	redeemReq, _ := http.NewRequest("POST", "/api/v1/auth/cli/token", strings.NewReader(mustJSON(redeemBody)))
+	redeemReq.Header.Set("Content-Type", "application/json")
+	redeem := httptest.NewRecorder()
+	suite.router.ServeHTTP(redeem, redeemReq)
+	assert.Equal(suite.T(), http.StatusOK, redeem.Code)
+	assert.Contains(suite.T(), redeem.Body.String(), "\"token\"")
+
+	replay := httptest.NewRecorder()
+	replayReq, _ := http.NewRequest("POST", "/api/v1/auth/cli/token", strings.NewReader(mustJSON(redeemBody)))
+	replayReq.Header.Set("Content-Type", "application/json")
+	suite.router.ServeHTTP(replay, replayReq)
+	assert.Equal(suite.T(), http.StatusUnauthorized, replay.Code)
+}
+
+func (suite *CLIHandlerTestSuite) TestStartCLIAuthorizationRejectsNonLoopbackCallbacks() {
+	for _, callback := range []string{
+		"https://attacker.example/callback",
+		"http://localhost.attacker.example:12345/callback",
+		"javascript:alert(1)",
+		"http://user@127.0.0.1:12345/callback",
+		"http://127.0.0.1:12345/callback#fragment",
+		"http://127.0.0.1/callback",
+	} {
+		suite.T().Run(callback, func(t *testing.T) {
+			verifier := strings.Repeat("a", 43)
+			digest := sha256.Sum256([]byte(verifier))
+			body := map[string]string{
+				"callback_url":          callback,
+				"device_name":           "Test Device",
+				"code_challenge":        base64.RawURLEncoding.EncodeToString(digest[:]),
+				"code_challenge_method": "S256",
+			}
+			req, _ := http.NewRequest("POST", "/api/v1/auth/cli/start", strings.NewReader(mustJSON(body)))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			suite.router.ServeHTTP(w, req)
+			assert.Equal(t, http.StatusBadRequest, w.Code)
+		})
+	}
 }
 
 func (suite *CLIHandlerTestSuite) TestGetInstallScript() {
@@ -162,7 +212,40 @@ func (suite *CLIHandlerTestSuite) TestGetInstallScript() {
 
 	body := w.Body.String()
 	assert.Contains(suite.T(), body, "#!/bin/bash")
-	assert.Contains(suite.T(), body, "curl -sL")
+	assert.Contains(suite.T(), body, "curl --fail --silent --show-error --location")
+	assert.NotContains(suite.T(), body, "TOKEN=")
+
+	maliciousReq, _ := http.NewRequest("GET", "/api/v1/cli/install?token=$(touch%20/tmp/pwned)", nil)
+	maliciousReq.Header.Set("X-Forwarded-Host", "$(id).attacker.example")
+	malicious := httptest.NewRecorder()
+	suite.router.ServeHTTP(malicious, maliciousReq)
+	assert.Equal(suite.T(), body, malicious.Body.String())
+	assert.NotContains(suite.T(), malicious.Body.String(), "attacker.example")
+}
+
+func (suite *CLIHandlerTestSuite) startCLIAuthorization(callback string) (string, string) {
+	verifier := strings.Repeat("a", 43)
+	digest := sha256.Sum256([]byte(verifier))
+	body := map[string]string{
+		"callback_url":          callback,
+		"device_name":           "Test Device",
+		"code_challenge":        base64.RawURLEncoding.EncodeToString(digest[:]),
+		"code_challenge_method": "S256",
+	}
+	req, _ := http.NewRequest("POST", "/api/v1/auth/cli/start", strings.NewReader(mustJSON(body)))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	suite.router.ServeHTTP(w, req)
+	assert.Equal(suite.T(), http.StatusCreated, w.Code)
+
+	var response map[string]interface{}
+	assert.NoError(suite.T(), json.Unmarshal(w.Body.Bytes(), &response))
+	return response["state"].(string), verifier
+}
+
+func mustJSON(value interface{}) string {
+	encoded, _ := json.Marshal(value)
+	return string(encoded)
 }
 
 func (suite *CLIHandlerTestSuite) TestDownloadCLIBinary() {

@@ -1,7 +1,6 @@
 package adapters
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -13,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"scriberr/internal/netpolicy"
 	"scriberr/internal/transcription/interfaces"
 	"scriberr/pkg/logger"
 )
@@ -139,7 +139,7 @@ func (a *OpenAIAdapter) Transcribe(ctx context.Context, input interfaces.AudioIn
 	}
 
 	writeLog("Starting OpenAI transcription for job %s", procCtx.JobID)
-	writeLog("Input file: %s", input.FilePath)
+	writeLog("Input file accepted")
 
 	// Validate input
 	if err := a.ValidateAudioInput(input); err != nil {
@@ -158,11 +158,8 @@ func (a *OpenAIAdapter) Transcribe(ctx context.Context, input interfaces.AudioIn
 		return nil, fmt.Errorf("OpenAI API key is required but not provided")
 	}
 
-	// Prepare request body
-	body := &bytes.Buffer{}
-	writer := multipart.NewWriter(body)
-
-	// Add file
+	// Stream the multipart request so large recordings are never duplicated in
+	// process memory.
 	file, err := os.Open(input.FilePath)
 	if err != nil {
 		writeLog("Error: Failed to open audio file: %v", err)
@@ -170,74 +167,42 @@ func (a *OpenAIAdapter) Transcribe(ctx context.Context, input interfaces.AudioIn
 	}
 	defer file.Close()
 
-	part, err := writer.CreateFormFile("file", filepath.Base(input.FilePath))
-	if err != nil {
-		writeLog("Error: Failed to create form file: %v", err)
-		return nil, fmt.Errorf("failed to create form file: %w", err)
-	}
-	if _, err := io.Copy(part, file); err != nil {
-		writeLog("Error: Failed to copy file content: %v", err)
-		return nil, fmt.Errorf("failed to copy file content: %w", err)
-	}
-
 	// Add parameters
 	model := a.GetStringParameter(params, "model")
 	if model == "" {
 		model = "whisper-1"
 	}
 	writeLog("Model: %s", model)
-	_ = writer.WriteField("model", model)
-
-	if strings.HasPrefix(model, "gpt-4o") {
-		if strings.Contains(model, "diarize") {
-			_ = writer.WriteField("response_format", "diarized_json")
-		} else {
-			_ = writer.WriteField("response_format", "json")
-		}
-		// gpt-4o models don't support timestamp_granularities with these formats
-	} else {
-		_ = writer.WriteField("response_format", "verbose_json")
-		// timestamp_granularities is only supported for whisper-1
-		if model == "whisper-1" {
-			_ = writer.WriteField("timestamp_granularities[]", "word")    // Request word timestamps
-			_ = writer.WriteField("timestamp_granularities[]", "segment") // Request segment timestamps
-		}
-	}
 
 	if lang := a.GetStringParameter(params, "language"); lang != "" {
 		writeLog("Language: %s", lang)
-		_ = writer.WriteField("language", lang)
 	}
 
 	if prompt := a.GetStringParameter(params, "prompt"); prompt != "" {
 		writeLog("Prompt provided")
-		_ = writer.WriteField("prompt", prompt)
 	}
 
 	temp := a.GetFloatParameter(params, "temperature")
 	writeLog("Temperature: %.2f", temp)
-	_ = writer.WriteField("temperature", fmt.Sprintf("%.2f", temp))
-
-	if err := writer.Close(); err != nil {
-		writeLog("Error: Failed to close multipart writer: %v", err)
-		return nil, fmt.Errorf("failed to close multipart writer: %w", err)
-	}
+	pipeReader, pipeWriter := io.Pipe()
+	writer := multipart.NewWriter(pipeWriter)
+	contentType := writer.FormDataContentType()
+	go a.writeTranscriptionRequestBody(pipeWriter, writer, file, filepath.Base(input.FilePath), model, params)
 
 	// Create request
 	writeLog("Sending request to OpenAI API...")
-	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.openai.com/v1/audio/transcriptions", body)
+	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.openai.com/v1/audio/transcriptions", pipeReader)
 	if err != nil {
+		_ = pipeReader.CloseWithError(err)
 		writeLog("Error: Failed to create request: %v", err)
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("Content-Type", contentType)
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 
 	// Execute request
-	client := &http.Client{
-		Timeout: 10 * time.Minute, // Generous timeout for large files
-	}
+	client := netpolicy.NewPublicHTTPClient(10 * time.Minute)
 	resp, err := client.Do(req)
 	if err != nil {
 		writeLog("Error: Request failed: %v", err)
@@ -246,9 +211,8 @@ func (a *OpenAIAdapter) Transcribe(ctx context.Context, input interfaces.AudioIn
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		writeLog("Error: OpenAI API error (status %d): %s", resp.StatusCode, string(respBody))
-		return nil, fmt.Errorf("OpenAI API error (status %d): %s", resp.StatusCode, string(respBody))
+		writeLog("Error: OpenAI API error (status %d)", resp.StatusCode)
+		return nil, fmt.Errorf("OpenAI API error (status %d)", resp.StatusCode)
 	}
 
 	writeLog("Response received. Parsing...")
@@ -278,7 +242,7 @@ func (a *OpenAIAdapter) Transcribe(ctx context.Context, input interfaces.AudioIn
 		} `json:"words"`
 	}
 
-	if err := json.NewDecoder(resp.Body).Decode(&openAIResponse); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 64*1024*1024)).Decode(&openAIResponse); err != nil {
 		writeLog("Error: Failed to decode response: %v", err)
 		return nil, fmt.Errorf("failed to decode response: %w", err)
 	}
@@ -324,6 +288,68 @@ func (a *OpenAIAdapter) Transcribe(ctx context.Context, input interfaces.AudioIn
 	}
 
 	return result, nil
+}
+
+func (a *OpenAIAdapter) writeTranscriptionRequestBody(
+	pipeWriter *io.PipeWriter,
+	writer *multipart.Writer,
+	file *os.File,
+	filename string,
+	model string,
+	params map[string]interface{},
+) {
+	var writeErr error
+	defer func() {
+		if closeErr := writer.Close(); writeErr == nil {
+			writeErr = closeErr
+		}
+		_ = pipeWriter.CloseWithError(writeErr)
+	}()
+
+	part, writeErr := writer.CreateFormFile("file", filename)
+	if writeErr != nil {
+		return
+	}
+	if _, writeErr = io.Copy(part, file); writeErr != nil {
+		return
+	}
+	if writeErr = writer.WriteField("model", model); writeErr != nil {
+		return
+	}
+
+	if strings.HasPrefix(model, "gpt-4o") {
+		format := "json"
+		if strings.Contains(model, "diarize") {
+			format = "diarized_json"
+		}
+		if writeErr = writer.WriteField("response_format", format); writeErr != nil {
+			return
+		}
+	} else {
+		if writeErr = writer.WriteField("response_format", "verbose_json"); writeErr != nil {
+			return
+		}
+		if model == "whisper-1" {
+			if writeErr = writer.WriteField("timestamp_granularities[]", "word"); writeErr != nil {
+				return
+			}
+			if writeErr = writer.WriteField("timestamp_granularities[]", "segment"); writeErr != nil {
+				return
+			}
+		}
+	}
+
+	for field, value := range map[string]string{
+		"language":    a.GetStringParameter(params, "language"),
+		"prompt":      a.GetStringParameter(params, "prompt"),
+		"temperature": fmt.Sprintf("%.2f", a.GetFloatParameter(params, "temperature")),
+	} {
+		if value != "" {
+			if writeErr = writer.WriteField(field, value); writeErr != nil {
+				return
+			}
+		}
+	}
 }
 
 // GetEstimatedProcessingTime provides OpenAI-specific time estimation

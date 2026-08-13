@@ -50,6 +50,10 @@ jobs:
         working-directory: web/frontend
         run: npm ci
 
+      - name: Audit Frontend Dependencies
+        working-directory: web/frontend
+        run: npm audit
+
       - name: Build Frontend
         working-directory: web/frontend
         run: npm run build
@@ -58,11 +62,15 @@ jobs:
         working-directory: web/frontend
         run: npm run lint
 
+      - name: Run Frontend Type Check
+        working-directory: web/frontend
+        run: npm run type-check
+
     # Backend
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.24.1'
+          go-version-file: go.mod
           cache: true
 
       - name: Copy Frontend Assets
@@ -71,10 +79,16 @@ jobs:
           cp -r web/frontend/dist internal/web/
 
       - name: Build Go Project
-        run: go build -v ./...
+        run: go build -v ./cmd/... ./internal/... ./pkg/...
+
+      - name: Vet Go Project
+        run: go vet ./api-docs ./cmd/... ./internal/... ./pkg/... ./tests
+
+      - name: Scan Go dependencies
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./cmd/... ./internal/... ./pkg/...
 
       - name: Run Go Tests
-        run: go test -v ./...
+        run: go test -v ./api-docs ./cmd/... ./internal/... ./pkg/... ./tests
 
     # Project site
       - name: Setup Node.js
@@ -85,7 +99,7 @@ jobs:
           cache-dependency-path: web/project-site/package-lock.json
 
       - name: Install swag
-        run: go install github.com/swaggo/swag/cmd/swag@latest
+        run: go install github.com/swaggo/swag/cmd/swag@v1.16.6
 
       - name: Generate API documentation
         run: swag init -g server/main.go -o web/project-site/public/api --outputTypes json --dir cmd,internal
@@ -93,6 +107,10 @@ jobs:
       - name: Install dependencies
         working-directory: web/project-site
         run: npm ci
+
+      - name: Audit project site dependencies
+        working-directory: web/project-site
+        run: npm audit
 
       - name: Build project site
         working-directory: web/project-site

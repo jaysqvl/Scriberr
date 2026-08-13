@@ -38,6 +38,7 @@ type TaskQueue struct {
 	autoScale      bool
 	lastScaleTime  time.Time
 	jobRepo        repository.JobRepository
+	jobTimeout     time.Duration
 }
 
 // JobProcessor defines the interface for processing jobs
@@ -109,6 +110,14 @@ func NewTaskQueue(legacyWorkers int, processor JobProcessor, jobRepo repository.
 		autoScale:      autoScale,
 		lastScaleTime:  time.Now(),
 		jobRepo:        jobRepo,
+		jobTimeout:     2 * time.Hour,
+	}
+}
+
+// SetJobTimeout bounds each queued transcription and its child processes.
+func (tq *TaskQueue) SetJobTimeout(timeout time.Duration) {
+	if timeout > 0 {
+		tq.jobTimeout = timeout
 	}
 }
 
@@ -143,7 +152,6 @@ func (tq *TaskQueue) Start() {
 
 // Stop stops the task queue
 func (tq *TaskQueue) Stop() {
-	logger.Debug("Stopping task queue")
 	logger.Debug("Stopping task queue")
 	tq.cancel()
 	// Do not close jobChannel here as it causes panics in EnqueueJob
@@ -204,7 +212,7 @@ func (tq *TaskQueue) worker(id int) {
 			}
 
 			// Create context for this job and track it
-			jobCtx, jobCancel := context.WithCancel(tq.ctx)
+			jobCtx, jobCancel := context.WithTimeout(tq.ctx, tq.jobTimeout)
 			runningJob := &RunningJob{
 				Cancel:  jobCancel,
 				Process: nil, // Will be set by registerProcess callback
@@ -225,30 +233,38 @@ func (tq *TaskQueue) worker(id int) {
 
 			// Process the job with process registration
 			err = tq.processor.ProcessJobWithProcess(jobCtx, jobID, registerProcess)
+			jobContextErr := jobCtx.Err()
+			jobCancel()
 
 			// Remove job from running jobs
 			tq.jobsMutex.Lock()
 			delete(tq.runningJobs, jobID)
 			tq.jobsMutex.Unlock()
 
-			// Handle result
-			if err != nil {
-				if jobCtx.Err() == context.Canceled {
-					logger.Info("Job cancelled", "worker_id", id, "job_id", jobID)
-					if err := tq.updateJobStatus(jobID, models.StatusFailed); err != nil {
-						logger.Error("Failed to update job status", "job_id", jobID, "error", err)
-					}
-					if err := tq.updateJobError(jobID, "Job was cancelled by user"); err != nil {
-						logger.Error("Failed to update job error", "job_id", jobID, "error", err)
-					}
-				} else {
-					logger.Error("Job processing failed", "worker_id", id, "job_id", jobID, "error", err)
-					if err := tq.updateJobStatus(jobID, models.StatusFailed); err != nil {
-						logger.Error("Failed to update job status", "job_id", jobID, "error", err)
-					}
-					if err := tq.updateJobError(jobID, err.Error()); err != nil {
-						logger.Error("Failed to update job error", "job_id", jobID, "error", err)
-					}
+			// Context cancellation takes precedence even when a processor returns nil.
+			if jobContextErr == context.Canceled {
+				logger.Info("Job cancelled", "worker_id", id, "job_id", jobID)
+				if err := tq.updateJobStatus(jobID, models.StatusFailed); err != nil {
+					logger.Error("Failed to update job status", "job_id", jobID, "error", err)
+				}
+				if err := tq.updateJobError(jobID, "Job was cancelled by user"); err != nil {
+					logger.Error("Failed to update job error", "job_id", jobID, "error", err)
+				}
+			} else if jobContextErr == context.DeadlineExceeded {
+				logger.Warn("Job timed out", "worker_id", id, "job_id", jobID, "timeout", tq.jobTimeout)
+				if err := tq.updateJobStatus(jobID, models.StatusFailed); err != nil {
+					logger.Error("Failed to update job status", "job_id", jobID, "error", err)
+				}
+				if err := tq.updateJobError(jobID, "Job exceeded the configured processing timeout"); err != nil {
+					logger.Error("Failed to update job error", "job_id", jobID, "error", err)
+				}
+			} else if err != nil {
+				logger.Error("Job processing failed", "worker_id", id, "job_id", jobID, "error", err)
+				if err := tq.updateJobStatus(jobID, models.StatusFailed); err != nil {
+					logger.Error("Failed to update job status", "job_id", jobID, "error", err)
+				}
+				if err := tq.updateJobError(jobID, err.Error()); err != nil {
+					logger.Error("Failed to update job error", "job_id", jobID, "error", err)
 				}
 			} else {
 				logger.Debug("Job processed successfully", "worker_id", id, "job_id", jobID)

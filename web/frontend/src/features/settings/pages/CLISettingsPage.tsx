@@ -57,7 +57,7 @@ export function CLISettings() {
                 const host = window.location.host
                 const url = `${protocol}//${host}/install.sh`
 
-                setInstallCmd(`curl -sL "${url}" | bash`)
+                setInstallCmd(`curl -sL "${url}" | bash -s -- "${window.location.origin}"`)
             } catch (err) {
                 console.error(err)
             } finally {
@@ -160,4 +160,3 @@ export function CLISettings() {
         </Layout>
     )
 }
-

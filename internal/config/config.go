@@ -31,6 +31,11 @@ type Config struct {
 	TempDir               string
 	UploadChunkSizeBytes  int64
 	UploadSessionTTLHours int
+	MaxUploadBytes        int64
+	MinFreeDiskBytes      int64
+	MaxActiveUploads      int
+	MaxConcurrentMedia    int
+	MediaTimeoutMinutes   int
 
 	// Python/WhisperX configuration
 	WhisperXEnv string
@@ -83,6 +88,11 @@ func Load() *Config {
 		TempDir:                  getEnv("TEMP_DIR", "data/temp"),
 		UploadChunkSizeBytes:     int64(chunkSizeMB) * 1024 * 1024,
 		UploadSessionTTLHours:    sessionTTLHours,
+		MaxUploadBytes:           int64(clampInt(getEnvInt("MAX_UPLOAD_SIZE_GB", 20), 1, 200)) * 1024 * 1024 * 1024,
+		MinFreeDiskBytes:         int64(clampInt(getEnvInt("MIN_FREE_DISK_GB", 1), 0, 100)) * 1024 * 1024 * 1024,
+		MaxActiveUploads:         clampInt(getEnvInt("MAX_ACTIVE_UPLOADS", 8), 1, 100),
+		MaxConcurrentMedia:       clampInt(getEnvInt("MAX_CONCURRENT_MEDIA_JOBS", 2), 1, 16),
+		MediaTimeoutMinutes:      clampInt(getEnvInt("MEDIA_PROCESS_TIMEOUT_MINUTES", 120), 5, 24*60),
 		WhisperXEnv:              getEnv("WHISPERX_ENV", "data/whisperx-env"),
 		SecureCookies:            getEnv("SECURE_COOKIES", defaultSecure) == "true",
 		TrustedProxies:           splitCSV(getEnv("TRUSTED_PROXIES", "")),
@@ -161,18 +171,29 @@ func getJWTSecret() string {
 	// Persist a dev secret across restarts to avoid invalidating tokens
 	secretFile := getEnv("JWT_SECRET_FILE", "data/jwt_secret")
 	if data, err := os.ReadFile(secretFile); err == nil && len(data) > 0 {
-		return strings.TrimSpace(string(data))
+		secret := strings.TrimSpace(string(data))
+		if secret != "" {
+			if err := os.Chmod(secretFile, 0600); err != nil {
+				panic("secure JWT secret file permissions: " + err.Error())
+			}
+			return secret
+		}
 	}
 	// Generate a secure random JWT secret and persist it
 	bytes := make([]byte, 32)
 	if _, err := rand.Read(bytes); err != nil {
-		logger.Warn("Could not generate secure JWT secret, using fallback", "error", err)
-		return "fallback-jwt-secret-please-set-JWT_SECRET-env-var"
+		panic("generate secure JWT secret: " + err.Error())
 	}
 	secret := hex.EncodeToString(bytes)
-	// Ensure dir exists and write file (best-effort)
-	_ = os.MkdirAll(filepath.Dir(secretFile), 0755)
-	_ = os.WriteFile(secretFile, []byte(secret), 0600)
+	if err := os.MkdirAll(filepath.Dir(secretFile), 0755); err != nil {
+		panic("create JWT secret directory: " + err.Error())
+	}
+	if err := os.WriteFile(secretFile, []byte(secret), 0600); err != nil {
+		panic("persist JWT secret: " + err.Error())
+	}
+	if err := os.Chmod(secretFile, 0600); err != nil {
+		panic("secure JWT secret file permissions: " + err.Error())
+	}
 	logger.Debug("Generated persistent JWT secret", "path", secretFile)
 	return secret
 }

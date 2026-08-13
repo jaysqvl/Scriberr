@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"scriberr/internal/processutil"
 	"scriberr/internal/transcription/interfaces"
 	"scriberr/pkg/logger"
 )
@@ -418,7 +419,7 @@ func (w *WhisperXAdapter) Transcribe(ctx context.Context, input interfaces.Audio
 	}
 
 	// Execute WhisperX
-	cmd := exec.CommandContext(ctx, "uv", args...)
+	cmd := processutil.CommandContext(ctx, "uv", args...)
 
 	// Add nvidia libraries to LD_LIBRARY_PATH
 	env := os.Environ()
@@ -444,7 +445,14 @@ func (w *WhisperXAdapter) Transcribe(ctx context.Context, input interfaces.Audio
 		logger.Debug("Updated LD_LIBRARY_PATH for WhisperX", "path", newPath)
 	}
 
+	hfToken := w.GetStringParameter(params, "hf_token")
+	if hfToken == "" {
+		hfToken = os.Getenv("HF_TOKEN")
+	}
 	cmd.Env = append(env, "PYTHONUNBUFFERED=1")
+	if hfToken != "" {
+		cmd.Env = withEnvironmentValue(cmd.Env, "HF_TOKEN", hfToken)
+	}
 
 	// Setup log file
 	logFile, err := os.OpenFile(filepath.Join(procCtx.OutputDirectory, "transcription.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
@@ -456,7 +464,7 @@ func (w *WhisperXAdapter) Transcribe(ctx context.Context, input interfaces.Audio
 		cmd.Stderr = logFile
 	}
 
-	logger.Info("Executing WhisperX command", "args", strings.Join(args, " "))
+	logger.Info("Executing WhisperX command", "arg_count", len(args))
 
 	if err := cmd.Run(); err != nil {
 		if ctx.Err() == context.Canceled {
@@ -557,19 +565,21 @@ func (w *WhisperXAdapter) buildWhisperXArgs(input interfaces.AudioInput, params 
 	args = append(args, "--beam_size", strconv.Itoa(w.GetIntParameter(params, "beam_size")))
 	args = append(args, "--patience", fmt.Sprintf("%.2f", w.GetFloatParameter(params, "patience")))
 
-	// HuggingFace token - use param first, then fall back to environment variable
-	hfToken := w.GetStringParameter(params, "hf_token")
-	if hfToken == "" {
-		hfToken = os.Getenv("HF_TOKEN")
-	}
-	if hfToken != "" {
-		args = append(args, "--hf_token", hfToken)
-	}
-
 	// Disable print progress for cleaner output
 	args = append(args, "--print_progress", "False")
 
 	return args, nil
+}
+
+func withEnvironmentValue(environment []string, key, value string) []string {
+	prefix := key + "="
+	filtered := make([]string, 0, len(environment)+1)
+	for _, entry := range environment {
+		if !strings.HasPrefix(entry, prefix) {
+			filtered = append(filtered, entry)
+		}
+	}
+	return append(filtered, prefix+value)
 }
 
 // parseResult parses the WhisperX output files

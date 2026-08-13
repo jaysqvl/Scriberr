@@ -31,6 +31,12 @@ func SetupRoutes(handler *Handler, authService *auth.AuthService) *gin.Engine {
 
 	// Add custom logger middleware
 	router.Use(logger.GinLogger())
+	router.Use(func(c *gin.Context) {
+		c.Header("Content-Security-Policy", "frame-ancestors 'none'")
+		c.Header("X-Frame-Options", "DENY")
+		c.Header("X-Content-Type-Options", "nosniff")
+		c.Next()
+	})
 
 	// Add compression middleware first for maximum benefit
 	router.Use(middleware.CompressionMiddleware())
@@ -88,6 +94,8 @@ func SetupRoutes(handler *Handler, authService *auth.AuthService) *gin.Engine {
 			auth.POST("/login", handler.Login)
 			auth.POST("/refresh", handler.Refresh)
 			auth.POST("/logout", handler.Logout)
+			auth.POST("/cli/start", handler.StartCLIAuthorization)
+			auth.POST("/cli/token", handler.RedeemCLIAuthorization)
 
 			// Account management routes (require authentication)
 			authProtected := auth.Group("")
@@ -211,7 +219,7 @@ func SetupRoutes(handler *Handler, authService *auth.AuthService) *gin.Engine {
 
 		// LLM configuration routes (require authentication)
 		llm := v1.Group("/llm")
-		llm.Use(middleware.AuthMiddleware(authService))
+		llm.Use(middleware.JWTOnlyMiddleware(authService))
 		{
 			llm.GET("/config", handler.GetLLMConfig)
 			llm.POST("/config", handler.SaveLLMConfig)
@@ -262,7 +270,7 @@ func SetupRoutes(handler *Handler, authService *auth.AuthService) *gin.Engine {
 
 		// Config routes (require authentication)
 		config := v1.Group("/config")
-		config.Use(middleware.AuthMiddleware(authService))
+		config.Use(middleware.JWTOnlyMiddleware(authService))
 		{
 			config.POST("/openai/validate", handler.ValidateOpenAIKey)
 		}

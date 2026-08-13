@@ -106,6 +106,8 @@ func (h *TestHelper) ResetDB(t *testing.T) {
 		&models.SummaryTemplate{},
 		&models.LLMConfig{},
 		&models.APIKey{},
+		&models.RefreshToken{},
+		&models.RevokedAccessToken{},
 		&models.User{},
 	}
 
