@@ -1,6 +1,30 @@
 name: Publish Docker dev images
 
 on:
+  workflow_call:
+    inputs:
+      source_repository:
+        description: Source repository to build.
+        required: true
+        type: string
+      upstream_ref:
+        description: Upstream branch, tag, or SHA to build.
+        required: true
+        type: string
+      image_channel:
+        description: Docker tag channel to publish.
+        required: true
+        type: string
+      variants:
+        description: Image variant to build.
+        required: false
+        default: all
+        type: string
+      publish_latest:
+        description: Also publish latest tags for the selected variants.
+        required: false
+        default: false
+        type: boolean
   workflow_dispatch:
     inputs:
       source_repository:
@@ -40,7 +64,7 @@ permissions:
   packages: write
 
 concurrency:
-  group: docker-dev-images-${{ github.event.inputs.upstream_ref || vars.SCRIBERR_UPSTREAM_REF || github.ref_name }}
+  group: docker-dev-images-${{ inputs.upstream_ref || vars.SCRIBERR_UPSTREAM_REF || github.ref_name }}
   cancel-in-progress: false
 
 env:
@@ -72,11 +96,11 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           REF_NAME: ${{ github.ref_name }}
-          INPUT_SOURCE_REPOSITORY: ${{ github.event.inputs.source_repository }}
-          INPUT_UPSTREAM_REF: ${{ github.event.inputs.upstream_ref }}
-          INPUT_IMAGE_CHANNEL: ${{ github.event.inputs.image_channel }}
-          INPUT_VARIANTS: ${{ github.event.inputs.variants }}
-          INPUT_PUBLISH_LATEST: ${{ github.event.inputs.publish_latest }}
+          INPUT_SOURCE_REPOSITORY: ${{ inputs.source_repository }}
+          INPUT_UPSTREAM_REF: ${{ inputs.upstream_ref }}
+          INPUT_IMAGE_CHANNEL: ${{ inputs.image_channel }}
+          INPUT_VARIANTS: ${{ inputs.variants }}
+          INPUT_PUBLISH_LATEST: ${{ inputs.publish_latest }}
           VAR_SOURCE_REPOSITORY: ${{ vars.SCRIBERR_SOURCE_REPOSITORY }}
           VAR_UPSTREAM_REF: ${{ vars.SCRIBERR_UPSTREAM_REF }}
           VAR_IMAGE_CHANNEL: ${{ vars.SCRIBERR_IMAGE_CHANNEL }}

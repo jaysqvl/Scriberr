@@ -91,7 +91,8 @@ changelog:
 release:
   draft: false
   prerelease: auto
-  mode: replace
+  mode: keep-existing
+  replace_existing_artifacts: true
   header: |
     ## Scriberr {{ .Tag }}
     
