@@ -11,12 +11,24 @@ import (
 	"scriberr/internal/models"
 
 	"github.com/glebarez/sqlite"
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
 )
 
 // DB is the global database instance
 var DB *gorm.DB
+
+// refreshTokenFamilyMigration gives existing refresh-token rows a temporary
+// default while SQLite adds the new NOT NULL column. AutoMigrate removes the
+// default after the rows have been backfilled.
+type refreshTokenFamilyMigration struct {
+	FamilyID string `gorm:"not null;default:'';type:varchar(36)"`
+}
+
+func (refreshTokenFamilyMigration) TableName() string {
+	return "refresh_tokens"
+}
 
 // Initialize initializes the database connection with optimized settings
 func Initialize(dbPath string) error {
@@ -66,6 +78,10 @@ func Initialize(dbPath string) error {
 	sqlDB.SetMaxIdleConns(5)                   // Keep some connections idle
 	sqlDB.SetConnMaxLifetime(30 * time.Minute) // Reset connections every 30 minutes
 	sqlDB.SetConnMaxIdleTime(5 * time.Minute)  // Close idle connections after 5 minutes
+
+	if err := migrateRefreshTokenFamilies(DB); err != nil {
+		return fmt.Errorf("failed to migrate refresh-token families: %v", err)
+	}
 
 	// Auto migrate the schema
 	if err := DB.AutoMigrate(
@@ -127,6 +143,39 @@ func Initialize(dbPath string) error {
 	}
 
 	return nil
+}
+
+func migrateRefreshTokenFamilies(db *gorm.DB) error {
+	migrator := db.Migrator()
+	if !migrator.HasTable(&models.RefreshToken{}) {
+		return nil
+	}
+
+	columnWasMissing := !migrator.HasColumn(&models.RefreshToken{}, "FamilyID")
+	if columnWasMissing {
+		if err := migrator.AddColumn(&refreshTokenFamilyMigration{}, "FamilyID"); err != nil {
+			return fmt.Errorf("add family_id column: %w", err)
+		}
+	}
+
+	return db.Transaction(func(tx *gorm.DB) error {
+		var tokenIDs []uint
+		if err := tx.Table("refresh_tokens").
+			Where("family_id IS NULL OR family_id = ?", "").
+			Pluck("id", &tokenIDs).Error; err != nil {
+			return fmt.Errorf("find tokens without a family: %w", err)
+		}
+
+		for _, tokenID := range tokenIDs {
+			if err := tx.Table("refresh_tokens").
+				Where("id = ? AND (family_id IS NULL OR family_id = ?)", tokenID, "").
+				Update("family_id", uuid.NewString()).Error; err != nil {
+				return fmt.Errorf("backfill family for refresh token %d: %w", tokenID, err)
+			}
+		}
+
+		return nil
+	})
 }
 
 // Close closes the database connection gracefully
