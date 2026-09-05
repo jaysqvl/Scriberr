@@ -41,10 +41,10 @@ type Config struct {
 	WhisperXEnv string
 
 	// Environment configuration
-	Environment    string
-	AllowedOrigins []string
-	SecureCookies  bool // Explicit control over Secure flag (for HTTPS deployments)
-	TrustedProxies []string
+	Environment       string
+	AllowedOrigins    []string
+	SecureCookiesMode string // "auto" (default), "true" (always secure), or "false" (allow HTTP)
+	TrustedProxies    []string
 
 	// Authentication abuse protection
 	AuthRateLimitEnabled     bool
@@ -67,10 +67,9 @@ func Load() *Config {
 		logger.Debug("No .env file found, using system environment variables")
 	}
 
-	// Default SecureCookies to true in production, false otherwise
-	defaultSecure := "false"
-	if strings.ToLower(getEnv("APP_ENV", "development")) == "production" {
-		defaultSecure = "true"
+	secureCookiesMode := strings.ToLower(strings.TrimSpace(getEnv("SECURE_COOKIES", "auto")))
+	if secureCookiesMode == "" {
+		secureCookiesMode = "auto"
 	}
 
 	chunkSizeMB := clampInt(getEnvInt("UPLOAD_CHUNK_SIZE_MB", 50), 1, 90)
@@ -94,7 +93,7 @@ func Load() *Config {
 		MaxConcurrentMedia:       clampInt(getEnvInt("MAX_CONCURRENT_MEDIA_JOBS", 2), 1, 16),
 		MediaTimeoutMinutes:      clampInt(getEnvInt("MEDIA_PROCESS_TIMEOUT_MINUTES", 120), 5, 24*60),
 		WhisperXEnv:              getEnv("WHISPERX_ENV", "data/whisperx-env"),
-		SecureCookies:            getEnv("SECURE_COOKIES", defaultSecure) == "true",
+		SecureCookiesMode:        secureCookiesMode,
 		TrustedProxies:           splitCSV(getEnv("TRUSTED_PROXIES", "")),
 		AuthRateLimitEnabled:     getEnvBool("AUTH_RATE_LIMIT_ENABLED", true),
 		AuthMaxFailedAttempts:    getEnvInt("AUTH_MAX_FAILED_ATTEMPTS", 5),

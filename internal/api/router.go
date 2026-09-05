@@ -133,6 +133,7 @@ func SetupRoutes(handler *Handler, authService *auth.AuthService) *gin.Engine {
 		// Transcription routes (require authentication)
 		transcription := v1.Group("/transcription")
 		transcription.Use(middleware.AuthMiddleware(authService))
+		transcription.Use(handler.syncBrowserAccessCookie)
 		{
 			// File upload routes - disable compression for these
 			uploadRoutes := transcription.Group("")

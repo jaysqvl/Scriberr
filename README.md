@@ -194,7 +194,8 @@ Scriberr works out of the box. However, for Homebrew or manual installations, yo
 | `AUTH_FAILURE_WINDOW_SECONDS` | Rolling window for failed login attempts. | `600` |
 | `AUTH_LOCKOUT_SECONDS` | Lockout duration after too many failed attempts. | `900` |
 | `AUTH_IP_MAX_FAILED_ATTEMPTS` | Failed attempts per IP before IP-level lockout. | `20` |
-| `TRUSTED_PROXIES` | Comma-separated proxy IPs/CIDRs trusted for forwarded client IP headers. Empty means trust none. | `""` |
+| `TRUSTED_PROXIES` | Comma-separated proxy IPs/CIDRs trusted for forwarded client IP and request-scheme headers. Empty means trust none. | `""` |
+| `SECURE_COOKIES` | Cookie transport mode: `auto`, `true` (force HTTPS-only), or `false` (allow HTTP). | `auto` |
 
 **Example `.env` file:**
 
@@ -218,7 +219,7 @@ AUTH_RATE_LIMIT_ENABLED=true
 
 Scriberr includes in-app login throttling by default. Failed logins are tracked by username/IP and by IP, fast retries receive `429 Too Many Requests` with `Retry-After`, and repeated failures are temporarily locked out.
 
-If Scriberr is behind a reverse proxy and you want throttling to use the original client IP, set `TRUSTED_PROXIES` to the proxy IP or CIDR range. Leave it empty when exposing Scriberr directly so forwarded headers cannot be spoofed.
+If Scriberr is behind a reverse proxy, set `TRUSTED_PROXIES` to the proxy IP or CIDR range so throttling and secure-cookie detection can safely use forwarded headers. Leave it empty when exposing Scriberr directly so forwarded headers cannot be spoofed.
 
 The auth logger emits stable fields such as `event=login`, `result=failure`, `reason=invalid_password`, and `ip=...`, so host-level tools like fail2ban can still be layered on top if desired.
 
@@ -231,7 +232,7 @@ For a containerized setup, you can use Docker. We provide two configurations: on
 > [!IMPORTANT]
 > **Permissions:** Ensure you set the `PUID` and `PGID` environment variables to your host user's UID and GID (typically `1000` on Linux) to avoid permission issues with the SQLite database. You can find your UID/GID by running `id` on your host.
 >
-> **HTTP vs HTTPS:** By default, Scriberr enables **Secure Cookies** in production. If you are accessing the app via plain HTTP (not HTTPS), you MUST set `SECURE_COOKIES=false` in your environment variables, otherwise you will encounter "Unable to load audio stream" errors.
+> **HTTP vs HTTPS:** Scriberr automatically uses HTTPS-only cookies for direct TLS requests and HTTP-compatible cookies for direct plain-HTTP requests. Forwarded scheme headers are honored only when the immediate proxy is listed in `TRUSTED_PROXIES`; `SECURE_COOKIES=true` or `false` can force either mode.
 
 #### Standard Deployment (CPU)
 
@@ -254,7 +255,8 @@ services:
       - APP_ENV=production # DO NOT CHANGE THIS
       # CORS: comma-separated list of allowed origins for production
       # - ALLOWED_ORIGINS=https://your-domain.com
-      # - SECURE_COOKIES=false # Uncomment this ONLY if you are not using SSL
+      # - TRUSTED_PROXIES=172.18.0.0/16 # Set to the network of your reverse proxy
+      # - SECURE_COOKIES=true # Optional: force HTTPS-only cookies
     restart: unless-stopped
 
 volumes:
@@ -301,7 +303,8 @@ services:
       - APP_ENV=production # DO NOT CHANGE THIS
       # CORS: comma-separated list of allowed origins for production
       # - ALLOWED_ORIGINS=https://your-domain.com
-      # - SECURE_COOKIES=false # Uncomment this ONLY if you are not using SSL
+      # - TRUSTED_PROXIES=172.18.0.0/16 # Set to the network of your reverse proxy
+      # - SECURE_COOKIES=true # Optional: force HTTPS-only cookies
 
 volumes:
   scriberr_data: {}
@@ -372,13 +375,14 @@ Replace `1000` with the value you set for `PUID`/`PGID` (default is `1000`).
 
 #### 2. "Unable to load audio stream"
 
-If the application loads but you cannot play or see the audio waveform (receiving "Unable to load audio stream"), this is often due to the **Secure Cookies** security flag.
+If the application loads but you cannot play or see the audio waveform (receiving "Unable to load audio stream"), first refresh the page. Scriberr synchronizes restored browser sessions before the native audio request is made.
 
-By default, when `APP_ENV=production`, Scriberr enables `SECURE_COOKIES=true`. This prevents cookies from being sent over insecure (HTTP) connections.
+By default, `SECURE_COOKIES=auto` detects direct HTTP or HTTPS. When TLS terminates at a reverse proxy, list that proxy's IP or CIDR in `TRUSTED_PROXIES` so Scriberr can safely honor `X-Forwarded-Proto` or `Forwarded`.
 
 **Solutions:**
 - **Recommended:** Deploy Scriberr behind a Reverse Proxy (like Nginx, Caddy, or Traefik) and use SSL/TLS (HTTPS).
-- **Alternative:** If you must access over plain HTTP, set the following environment variable in your `docker-compose.yml`:
+- **Proxy setup:** Configure `TRUSTED_PROXIES` with only your proxy network and leave `SECURE_COOKIES=auto`.
+- **Override:** If scheme detection is unavailable, force the mode in `docker-compose.yml` (`true` for HTTPS or `false` for HTTP):
   ```yaml
   environment:
     - SECURE_COOKIES=false

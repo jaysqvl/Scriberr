@@ -36,3 +36,15 @@ func TestJWTSecretRegeneratesEmptyFileAndRepairsPermissions(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, os.FileMode(0600), info.Mode().Perm())
 }
+
+func TestSecureCookiesModeDefaultsToAutoAndHonorsOverrides(t *testing.T) {
+	t.Setenv("JWT_SECRET", "test-secret")
+	t.Setenv("SECURE_COOKIES", "")
+	require.Equal(t, "auto", Load().SecureCookiesMode)
+
+	t.Setenv("SECURE_COOKIES", "true")
+	require.Equal(t, "true", Load().SecureCookiesMode)
+
+	t.Setenv("SECURE_COOKIES", "false")
+	require.Equal(t, "false", Load().SecureCookiesMode)
+}

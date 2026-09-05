@@ -252,6 +252,134 @@ func (suite *APIHandlerTestSuite) TestLoginUser() {
 	assert.Equal(suite.T(), suite.helper.TestUser.Username, response.User.Username)
 }
 
+func (suite *APIHandlerTestSuite) TestHTTPLoginCookieStreamsAuthenticatedAudioRange() {
+	originalMode := suite.helper.Config.SecureCookiesMode
+	suite.helper.Config.SecureCookiesMode = "auto"
+	defer func() {
+		suite.helper.Config.SecureCookiesMode = originalMode
+	}()
+
+	loginData := map[string]string{
+		"username": suite.helper.TestUser.Username,
+		"password": "testpassword123",
+	}
+	jsonData, err := json.Marshal(loginData)
+	require.NoError(suite.T(), err)
+
+	loginRequest := httptest.NewRequest(http.MethodPost, "http://scriberr.test/api/v1/auth/login", bytes.NewReader(jsonData))
+	loginRequest.Header.Set("Content-Type", "application/json")
+	loginResponse := httptest.NewRecorder()
+	suite.router.ServeHTTP(loginResponse, loginRequest)
+	require.Equal(suite.T(), http.StatusOK, loginResponse.Code)
+
+	var accessCookie *http.Cookie
+	for _, cookie := range loginResponse.Result().Cookies() {
+		if cookie.Name == "scriberr_access_token" {
+			accessCookie = cookie
+			break
+		}
+	}
+	require.NotNil(suite.T(), accessCookie)
+	require.False(suite.T(), accessCookie.Secure, "plain-HTTP sessions must receive a cookie the browser can send to <audio>")
+	require.True(suite.T(), accessCookie.HttpOnly)
+
+	audioBytes := []byte("ID3abcdef")
+	audioPath := suite.T().TempDir() + "/existing recording.mp3"
+	require.NoError(suite.T(), os.WriteFile(audioPath, audioBytes, 0600))
+	job := suite.helper.CreateTestTranscriptionJob(suite.T(), "Existing recording")
+	job.AudioPath = audioPath
+	require.NoError(suite.T(), suite.helper.DB.Save(job).Error)
+
+	streamRequest := httptest.NewRequest(http.MethodGet, "/api/v1/transcription/"+job.ID+"/audio", nil)
+	streamRequest.AddCookie(accessCookie)
+	streamRequest.Header.Set("Range", "bytes=3-6")
+	streamResponse := httptest.NewRecorder()
+	suite.router.ServeHTTP(streamResponse, streamRequest)
+
+	require.Equal(suite.T(), http.StatusPartialContent, streamResponse.Code)
+	require.Equal(suite.T(), "bytes", streamResponse.Header().Get("Accept-Ranges"))
+	require.Equal(suite.T(), "bytes 3-6/9", streamResponse.Header().Get("Content-Range"))
+	require.Equal(suite.T(), audioBytes[3:7], streamResponse.Body.Bytes())
+}
+
+func (suite *APIHandlerTestSuite) TestPersistedBearerSessionRepairsAudioCookie() {
+	originalMode := suite.helper.Config.SecureCookiesMode
+	suite.helper.Config.SecureCookiesMode = "auto"
+	defer func() {
+		suite.helper.Config.SecureCookiesMode = originalMode
+	}()
+
+	audioBytes := []byte("ID3persisted-session")
+	audioPath := suite.T().TempDir() + "/persisted session.mp3"
+	require.NoError(suite.T(), os.WriteFile(audioPath, audioBytes, 0600))
+	job := suite.helper.CreateTestTranscriptionJob(suite.T(), "Persisted session")
+	job.AudioPath = audioPath
+	require.NoError(suite.T(), suite.helper.DB.Save(job).Error)
+
+	// This is the first JSON request after restoring a JWT from localStorage.
+	// It must repair the cookie before React mounts the native <audio> element.
+	detailRequest := httptest.NewRequest(http.MethodGet, "/api/v1/transcription/"+job.ID, nil)
+	detailRequest.Header.Set("Authorization", "Bearer "+suite.helper.TestToken)
+	detailResponse := httptest.NewRecorder()
+	suite.router.ServeHTTP(detailResponse, detailRequest)
+	require.Equal(suite.T(), http.StatusOK, detailResponse.Code)
+
+	var accessCookie *http.Cookie
+	for _, cookie := range detailResponse.Result().Cookies() {
+		if cookie.Name == "scriberr_access_token" {
+			accessCookie = cookie
+			break
+		}
+	}
+	require.NotNil(suite.T(), accessCookie, "a validated bearer session must be synchronized for native media requests")
+	require.False(suite.T(), accessCookie.Secure)
+	require.Equal(suite.T(), suite.helper.TestToken, accessCookie.Value)
+
+	streamRequest := httptest.NewRequest(http.MethodGet, "/api/v1/transcription/"+job.ID+"/audio", nil)
+	streamRequest.AddCookie(accessCookie)
+	streamRequest.Header.Set("Range", "bytes=0-2")
+	streamResponse := httptest.NewRecorder()
+	suite.router.ServeHTTP(streamResponse, streamRequest)
+
+	require.Equal(suite.T(), http.StatusPartialContent, streamResponse.Code)
+	require.Equal(suite.T(), "bytes 0-2/20", streamResponse.Header().Get("Content-Range"))
+	require.Equal(suite.T(), []byte("ID3"), streamResponse.Body.Bytes())
+}
+
+func (suite *APIHandlerTestSuite) TestRegistrationSetsMediaAccessCookie() {
+	originalMode := suite.helper.Config.SecureCookiesMode
+	suite.helper.Config.SecureCookiesMode = "auto"
+	defer func() {
+		suite.helper.Config.SecureCookiesMode = originalMode
+	}()
+
+	require.NoError(suite.T(), suite.helper.DB.Where("id = ?", suite.helper.TestUser.ID).Delete(&models.User{}).Error)
+	registerData := map[string]string{
+		"username":        "first-admin",
+		"password":        "testpassword123",
+		"confirmPassword": "testpassword123",
+	}
+	jsonData, err := json.Marshal(registerData)
+	require.NoError(suite.T(), err)
+
+	request := httptest.NewRequest(http.MethodPost, "http://scriberr.test/api/v1/auth/register", bytes.NewReader(jsonData))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	suite.router.ServeHTTP(response, request)
+	require.Equal(suite.T(), http.StatusCreated, response.Code)
+
+	var accessCookie *http.Cookie
+	for _, cookie := range response.Result().Cookies() {
+		if cookie.Name == "scriberr_access_token" {
+			accessCookie = cookie
+			break
+		}
+	}
+	require.NotNil(suite.T(), accessCookie, "registration logs the user in and must authorize native media")
+	require.False(suite.T(), accessCookie.Secure)
+	require.True(suite.T(), accessCookie.HttpOnly)
+}
+
 func (suite *APIHandlerTestSuite) TestLoginRateLimitInvalidCredentials() {
 	w := suite.makeLoginRequest(suite.router, suite.helper.TestUser.Username, "wrong-password", "198.51.100.10:1000", "")
 	assert.Equal(suite.T(), http.StatusUnauthorized, w.Code)
