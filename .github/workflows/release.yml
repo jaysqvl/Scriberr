@@ -69,7 +69,7 @@ jobs:
         run: cd web/frontend && npm audit
 
       - name: Check frontend
-        run: cd web/frontend && npm run lint && npm run type-check
+        run: cd web/frontend && npm test && npm run lint && npm run type-check
 
       - name: Build frontend
         run: cd web/frontend && npm run build
