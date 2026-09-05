@@ -192,7 +192,7 @@ export function useExecutionData(audioId: string) {
     });
 }
 
-export function useExecutionRuns(audioId: string, enabled = true) {
+export function useExecutionRuns(audioId: string, enabled = true, pollWhileActive = false) {
     const { getAuthHeaders } = useAuth();
     return useQuery({
         queryKey: ["executionRuns", audioId],
@@ -204,6 +204,7 @@ export function useExecutionRuns(audioId: string, enabled = true) {
             return response.json() as Promise<ExecutionRunsData>;
         },
         enabled: enabled && !!audioId,
+        refetchInterval: pollWhileActive ? 3000 : false,
     });
 }
 

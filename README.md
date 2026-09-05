@@ -52,6 +52,7 @@ Scriberr goes beyond simple transcription and provides various advanced capabili
 It combines powerful under-the-hood AI with a polished, fluid user interface that makes managing your recordings feel effortless. Whether you are sorting through voice notes or analyzing long meetings, Scriberr provides a beautiful environment to get work done:
 
 - **Smart Speaker Detection**: Scriberr automatically detects different speakers (Diarization) and labels exactly who said what.
+- **Compare Models Hands-Free**: Queue multiple profiles or model configurations for one recording. Scriberr runs them sequentially, preserves each attempt, and lets you reorder, stop, or cancel work from the transcript page.
 - **Chat with your Audio**: Connect seamlessly with Ollama or OpenAI API compatible providers. You can generate summaries, ask questions, or have a full conversation with your transcripts right inside the app.
 - **Built for your Workflow**: With extensive APIs and Folder Watcher that automatically processes new files in a folder, Scriberr fits right into your existing automations (like n8n).
 - **Capture & Organize**: Use the built-in audio recorder to capture thoughts on the fly, and the integrated note-taking features to annotate your transcripts as you listen.

@@ -39,6 +39,22 @@ import { SummaryDialog } from "./audio-detail/SummaryDialog";
 import { DownloadDialog } from "./audio-detail/DownloadDialog";
 import { ChatSidePanel } from "./ChatSidePanel";
 import { RunWorkspace } from "./audio-detail/RunWorkspace";
+import { RunQueuePanel } from "./audio-detail/RunQueuePanel";
+import {
+    useAddTranscriptionQueueItem,
+    useCancelTranscriptionQueueItem,
+    useClearTranscriptionQueue,
+    useReorderTranscriptionQueue,
+    useTranscriptionQueue,
+} from "@/features/transcription/hooks/useTranscriptionQueue";
+import {
+    getQueuedItems,
+    isStopRunTargetCurrent,
+    moveQueuedItemIds,
+    shouldRefreshRunArtifacts,
+    type RunArtifactRefreshSnapshot,
+    type StopRunTargetSnapshot,
+} from "@/features/transcription/hooks/transcriptionQueue";
 import { useIsMobile } from "@/hooks/use-mobile";
 
 // Types
@@ -81,8 +97,12 @@ export const AudioDetailView = function AudioDetailView({ audioId: propAudioId }
     const [summaryDialogOpen, setSummaryDialogOpen] = useState(false);
     const [rerunProfileDialogOpen, setRerunProfileDialogOpen] = useState(false);
     const [rerunAdvancedDialogOpen, setRerunAdvancedDialogOpen] = useState(false);
+    const [queueProfileDialogOpen, setQueueProfileDialogOpen] = useState(false);
+    const [queueAdvancedDialogOpen, setQueueAdvancedDialogOpen] = useState(false);
+    const [queueAnnouncement, setQueueAnnouncement] = useState("");
     const [rerunLoading, setRerunLoading] = useState(false);
     const [stopRunDialogOpen, setStopRunDialogOpen] = useState(false);
+    const [stopRunTarget, setStopRunTarget] = useState<StopRunTargetSnapshot | null>(null);
     const [stopRunLoading, setStopRunLoading] = useState(false);
     const [selectedRunId, setSelectedRunId] = useState<string | undefined>();
     const [compareRunId, setCompareRunId] = useState<string | undefined>();
@@ -90,12 +110,40 @@ export const AudioDetailView = function AudioDetailView({ audioId: propAudioId }
 
     // Data Fetching
     const { data: audioFile, isLoading, error } = useAudioDetail(audioId || "");
+    const queueQuery = useTranscriptionQueue(audioId || "", !!audioId);
+    const queuedRuns = useMemo(
+        () => getQueuedItems(queueQuery.data?.items || []),
+        [queueQuery.data?.items]
+    );
+    const activeQueueItem = queueQuery.data?.active_item;
+    const canStopRun = audioFile?.status === "processing"
+        || audioFile?.status === "pending"
+        || activeQueueItem?.status === "processing"
+        || activeQueueItem?.status === "pending";
+    const currentRunStatus = activeQueueItem?.status === "pending"
+        || (!activeQueueItem && audioFile?.status === "pending")
+        ? "pending"
+        : "processing";
+    const addQueueItem = useAddTranscriptionQueueItem(audioId || "");
+    const reorderQueue = useReorderTranscriptionQueue(audioId || "");
+    const cancelQueueItem = useCancelTranscriptionQueueItem(audioId || "");
+    const clearQueue = useClearTranscriptionQueue(audioId || "");
+    const queueBusy = addQueueItem.isPending
+        || reorderQueue.isPending
+        || cancelQueueItem.isPending
+        || clearQueue.isPending;
     const { mutate: updateTitle } = useUpdateTitle(audioId || "");
     const { mutateAsync: setActiveRun, isPending: activeRunUpdating } = useSetActiveRun(audioId || "");
     // Fetch transcript & speakers here to support menu actions
     const { data: latestTranscript } = useTranscript(audioId || "", true);
-    const { data: runsData } = useExecutionRuns(audioId || "", !!audioId);
+    const { data: runsData } = useExecutionRuns(
+        audioId || "",
+        !!audioId,
+        canStopRun
+    );
     const runs = useMemo(() => runsData?.runs || [], [runsData?.runs]);
+    const currentRun = runs.find((run) => run.status === "processing" || run.status === "pending");
+    const hasSequentialRuns = Boolean(activeQueueItem) || queuedRuns.length > 0;
     const selectedRun = runs.find((run) => run.id === selectedRunId);
     const { data: selectedRunTranscript, isLoading: selectedRunTranscriptLoading } = useRunTranscript(audioId || "", selectedRunId, !!selectedRunId);
     const { data: compareRunTranscript, isLoading: compareRunTranscriptLoading } = useRunTranscript(audioId || "", compareRunId, runViewMode === "compare" && !!compareRunId);
@@ -174,6 +222,50 @@ export const AudioDetailView = function AudioDetailView({ audioId: propAudioId }
         }
     }, [compareRunId, runViewMode, runs, selectedRunId]);
 
+    useEffect(() => {
+        if (!stopRunDialogOpen || !stopRunTarget) return;
+
+        const targetChanged = !isStopRunTargetCurrent(stopRunTarget, {
+            queueItemId: activeQueueItem?.id,
+            executionRunId: currentRun?.id,
+        });
+
+        if (!canStopRun || targetChanged) {
+            setStopRunDialogOpen(false);
+            setStopRunTarget(null);
+            if (canStopRun && targetChanged) {
+                toast({
+                    title: "Active run changed",
+                    description: "The stop confirmation was closed so the next run is not stopped by mistake.",
+                });
+            }
+        }
+    }, [activeQueueItem, canStopRun, currentRun?.id, stopRunDialogOpen, stopRunTarget, toast]);
+
+    const refreshSnapshotRef = useRef<RunArtifactRefreshSnapshot | undefined>(undefined);
+    useEffect(() => {
+        if (!audioId) return;
+
+        const nextSnapshot: RunArtifactRefreshSnapshot = {
+            audioId,
+            activeItemId: activeQueueItem?.id,
+            activeItemStatus: activeQueueItem?.status,
+            parentStatus: audioFile?.status,
+        };
+        const shouldRefresh = shouldRefreshRunArtifacts(refreshSnapshotRef.current, nextSnapshot);
+        refreshSnapshotRef.current = nextSnapshot;
+        if (!shouldRefresh) return;
+
+        void Promise.all([
+            queryClient.invalidateQueries({ queryKey: ["executionRuns", audioId] }),
+            queryClient.invalidateQueries({ queryKey: ["executionData", audioId] }),
+            queryClient.invalidateQueries({ queryKey: ["transcript", audioId] }),
+            queryClient.invalidateQueries({ queryKey: ["runTranscript", audioId] }),
+            queryClient.invalidateQueries({ queryKey: ["logs", audioId] }),
+            queryClient.invalidateQueries({ queryKey: ["runLogs", audioId] }),
+        ]);
+    }, [activeQueueItem?.id, activeQueueItem?.status, audioFile?.status, audioId, queryClient]);
+
     // Handlers
     const handleTimeUpdate = useCallback((time: number) => {
         setCurrentTime(time);
@@ -193,8 +285,32 @@ export const AudioDetailView = function AudioDetailView({ audioId: propAudioId }
         }
     };
 
+    const handleOpenStopRunDialog = useCallback(() => {
+        if (!canStopRun) return;
+        setStopRunTarget({
+            queueItemId: activeQueueItem?.id,
+            executionRunId: currentRun?.id,
+        });
+        setStopRunDialogOpen(true);
+    }, [activeQueueItem?.id, canStopRun, currentRun?.id]);
+
     const handleRerun = useCallback(async (params: WhisperXParams) => {
         if (!audioId || !audioFile) return;
+
+        if (queueQuery.isLoading || queueQuery.isError) {
+            toast({
+                title: "Run queue is not ready",
+                description: "Reload the queue before starting another transcription.",
+            });
+            return;
+        }
+        if (hasSequentialRuns) {
+            toast({
+                title: "Sequential runs are already queued",
+                description: "Add this configuration to the queue instead of starting an immediate run.",
+            });
+            return;
+        }
 
         if (audioFile.is_multi_track && !params.is_multi_track_enabled) {
             alert("Multi-track audio requires multi-track transcription to be enabled.");
@@ -223,6 +339,7 @@ export const AudioDetailView = function AudioDetailView({ audioId: propAudioId }
             setRerunProfileDialogOpen(false);
             setRerunAdvancedDialogOpen(false);
             await Promise.all([
+                queryClient.invalidateQueries({ queryKey: ["transcriptionQueue", audioId] }),
                 queryClient.invalidateQueries({ queryKey: ["audio", audioId] }),
                 queryClient.invalidateQueries({ queryKey: ["transcript", audioId] }),
                 queryClient.invalidateQueries({ queryKey: ["executionRuns", audioId] }),
@@ -235,10 +352,24 @@ export const AudioDetailView = function AudioDetailView({ audioId: propAudioId }
         } finally {
             setRerunLoading(false);
         }
-    }, [audioId, audioFile, getAuthHeaders, queryClient]);
+    }, [audioId, audioFile, getAuthHeaders, hasSequentialRuns, queryClient, queueQuery.isError, queueQuery.isLoading, toast]);
 
     const handleStopRun = useCallback(async () => {
-        if (!audioId) return;
+        if (!audioId || !stopRunTarget) return;
+
+        const targetStillCurrent = isStopRunTargetCurrent(stopRunTarget, {
+            queueItemId: activeQueueItem?.id,
+            executionRunId: currentRun?.id,
+        });
+        if (!targetStillCurrent) {
+            setStopRunDialogOpen(false);
+            setStopRunTarget(null);
+            toast({
+                title: "Active run changed",
+                description: "Nothing was stopped. Open the confirmation again if you want to stop the new active run.",
+            });
+            return;
+        }
 
         try {
             setStopRunLoading(true);
@@ -246,7 +377,11 @@ export const AudioDetailView = function AudioDetailView({ audioId: propAudioId }
                 method: "POST",
                 headers: {
                     ...getAuthHeaders(),
+                    "Content-Type": "application/json",
                 },
+                body: JSON.stringify(stopRunTarget.queueItemId
+                    ? { queue_item_id: stopRunTarget.queueItemId }
+                    : {}),
             });
 
             if (!response.ok) {
@@ -262,7 +397,9 @@ export const AudioDetailView = function AudioDetailView({ audioId: propAudioId }
             }
 
             setStopRunDialogOpen(false);
+            setStopRunTarget(null);
             await Promise.all([
+                queryClient.invalidateQueries({ queryKey: ["transcriptionQueue", audioId] }),
                 queryClient.invalidateQueries({ queryKey: ["audio", audioId] }),
                 queryClient.invalidateQueries({ queryKey: ["transcript", audioId] }),
                 queryClient.invalidateQueries({ queryKey: ["executionRuns", audioId] }),
@@ -271,11 +408,16 @@ export const AudioDetailView = function AudioDetailView({ audioId: propAudioId }
                 queryClient.invalidateQueries({ queryKey: ["audioFiles"] }),
             ]);
         } catch (err) {
-            alert(err instanceof Error ? err.message : "Error stopping run");
+            setStopRunDialogOpen(false);
+            setStopRunTarget(null);
+            toast({
+                title: "Could not stop run",
+                description: err instanceof Error ? err.message : "The run could not be stopped.",
+            });
         } finally {
             setStopRunLoading(false);
         }
-    }, [audioId, getAuthHeaders, queryClient]);
+    }, [activeQueueItem, audioId, currentRun?.id, getAuthHeaders, queryClient, stopRunTarget, toast]);
 
     const getRunFilenameSuffix = useCallback((run?: ExecutionRun) => {
         if (!run) return undefined;
@@ -349,6 +491,96 @@ export const AudioDetailView = function AudioDetailView({ audioId: propAudioId }
         setRerunAdvancedDialogOpen(true);
     }, []);
 
+    const handleQueueRun = useCallback(async (params: WhisperXParams, profileId?: string, profileName?: string) => {
+        if (!audioId || !audioFile) return;
+
+        if (audioFile.is_multi_track && !params.is_multi_track_enabled) {
+            toast({
+                title: "This profile is not compatible",
+                description: "Multi-track audio requires multi-track transcription to be enabled.",
+            });
+            return;
+        }
+        if (!audioFile.is_multi_track && params.is_multi_track_enabled) {
+            toast({
+                title: "This profile is not compatible",
+                description: "Multi-track transcription cannot be used with a single-track audio file.",
+            });
+            return;
+        }
+
+        try {
+            await addQueueItem.mutateAsync({
+                parameters: params,
+                profile_id: profileId,
+                profile_name: profileName,
+            });
+            setQueueProfileDialogOpen(false);
+            setQueueAdvancedDialogOpen(false);
+            setQueueAnnouncement(`Run added at queue position ${queuedRuns.length + 1}.`);
+            toast({
+                title: "Run added to the queue",
+                description: canStopRun
+                    ? "It will start automatically after the runs ahead of it finish."
+                    : "The server will start it as soon as a worker is available.",
+            });
+        } catch (err) {
+            toast({
+                title: "Could not queue run",
+                description: err instanceof Error ? err.message : "The run could not be added to the queue.",
+            });
+        } finally {
+            // Clear mutation variables so provider credentials remain request-only.
+            addQueueItem.reset();
+        }
+    }, [addQueueItem, audioFile, audioId, canStopRun, queuedRuns.length, toast]);
+
+    const handleRemoveQueuedRun = useCallback(async (runId: string) => {
+        const removedIndex = queuedRuns.findIndex((item) => item.id === runId);
+        try {
+            await cancelQueueItem.mutateAsync(runId);
+            if (removedIndex >= 0) setQueueAnnouncement(`Queued run at position ${removedIndex + 1} cancelled.`);
+        } catch (err) {
+            toast({
+                title: "Could not cancel queued run",
+                description: err instanceof Error ? err.message : "The queued run could not be cancelled.",
+            });
+        }
+    }, [cancelQueueItem, queuedRuns, toast]);
+
+    const handleMoveQueuedRun = useCallback(async (runId: string, direction: "up" | "down") => {
+        const currentIndex = queuedRuns.findIndex((item) => item.id === runId);
+        const nextIndex = direction === "up" ? currentIndex - 1 : currentIndex + 1;
+        if (currentIndex < 0 || nextIndex < 0 || nextIndex >= queuedRuns.length) return;
+
+        try {
+            await reorderQueue.mutateAsync(moveQueuedItemIds(queuedRuns, runId, direction));
+            setQueueAnnouncement(`Queued run moved to position ${nextIndex + 1}.`);
+        } catch (err) {
+            toast({
+                title: "Could not reorder queue",
+                description: err instanceof Error ? err.message : "The queue order could not be saved.",
+            });
+        }
+    }, [queuedRuns, reorderQueue, toast]);
+
+    const handleClearQueuedRuns = useCallback(async () => {
+        try {
+            await clearQueue.mutateAsync();
+            setQueueAnnouncement("All waiting runs cancelled.");
+        } catch (err) {
+            toast({
+                title: "Could not clear queue",
+                description: err instanceof Error ? err.message : "The waiting runs could not be cancelled.",
+            });
+        }
+    }, [clearQueue, toast]);
+
+    const handleOpenQueueAdvanced = useCallback(() => {
+        setQueueProfileDialogOpen(false);
+        setQueueAdvancedDialogOpen(true);
+    }, []);
+
     if (!audioId) return <div>Invalid Audio ID</div>;
 
     // Handler for notes/chat exclusivity
@@ -390,8 +622,6 @@ export const AudioDetailView = function AudioDetailView({ audioId: propAudioId }
         year: "numeric"
     }).toUpperCase();
     const runCount = runsData?.runs.length || 0;
-    const canStopRun = audioFile.status === "processing" || audioFile.status === "pending";
-
     return (
         <div className="h-screen flex flex-col bg-[var(--bg-main)] relative selection:bg-[var(--brand-light)] overflow-hidden">
             {/* Split Container */}
@@ -583,6 +813,26 @@ export const AudioDetailView = function AudioDetailView({ audioId: propAudioId }
                                     </div>
                                 </div>
 
+                                <RunQueuePanel
+                                    items={queuedRuns}
+                                    activeItem={activeQueueItem}
+                                    currentRun={currentRun}
+                                    currentStatus={currentRunStatus}
+                                    runInProgress={canStopRun}
+                                    loading={queueQuery.isLoading}
+                                    refreshing={queueQuery.isFetching}
+                                    error={queueQuery.error instanceof Error ? queueQuery.error.message : undefined}
+                                    queueBusy={queueBusy}
+                                    busyItemId={cancelQueueItem.isPending ? cancelQueueItem.variables : undefined}
+                                    announcement={queueAnnouncement}
+                                    onAddRun={() => setQueueProfileDialogOpen(true)}
+                                    onRemoveRun={handleRemoveQueuedRun}
+                                    onMoveRun={handleMoveQueuedRun}
+                                    onClearQueue={handleClearQueuedRuns}
+                                    onStopRun={handleOpenStopRunDialog}
+                                    onRetry={() => void queueQuery.refetch()}
+                                />
+
                                 <RunWorkspace
                                     runs={runs}
                                     activeRunId={runsData?.active_run_id}
@@ -599,10 +849,12 @@ export const AudioDetailView = function AudioDetailView({ audioId: propAudioId }
                                     onCompareRunChange={setCompareRunId}
                                     onModeChange={setRunViewMode}
                                     onRunAgain={() => setRerunProfileDialogOpen(true)}
-                                    onStopRun={() => setStopRunDialogOpen(true)}
-                                    runAgainDisabled={rerunLoading || canStopRun}
+                                    runAgainLabel="Run Again"
+                                    onStopRun={handleOpenStopRunDialog}
+                                    runAgainDisabled={rerunLoading || canStopRun || hasSequentialRuns || !queueQuery.isSuccess}
                                     canStopRun={canStopRun}
                                     stoppingRun={stopRunLoading}
+                                    showRunControl={!canStopRun && !hasSequentialRuns && queueQuery.isSuccess}
                                     onOpenRunDetails={handleOpenRunDetails}
                                     onOpenRunLogs={handleOpenRunLogs}
                                     onDownloadRun={handleRunDownload}
@@ -719,15 +971,48 @@ export const AudioDetailView = function AudioDetailView({ audioId: propAudioId }
                 isMultiTrack={audioFile.is_multi_track}
                 title="Run Again Advanced"
             />
-            <AlertDialog open={stopRunDialogOpen} onOpenChange={setStopRunDialogOpen}>
+            <TranscribeDDialog
+                open={queueProfileDialogOpen}
+                onOpenChange={setQueueProfileDialogOpen}
+                onStartTranscription={handleQueueRun}
+                title="Add Run to Queue"
+                description="Choose a saved profile to add to the persistent sequential queue, or open Advanced for a custom model setup."
+                actionLabel="Add to Queue"
+                loadingLabel="Adding..."
+                loading={addQueueItem.isPending}
+                onAdvanced={handleOpenQueueAdvanced}
+            />
+            <TranscriptionConfigDialog
+                open={queueAdvancedDialogOpen}
+                onOpenChange={setQueueAdvancedDialogOpen}
+                onStartTranscription={handleQueueRun}
+                initialParams={audioFile.parameters as WhisperXParams | undefined}
+                isMultiTrack={audioFile.is_multi_track}
+                title="Add Advanced Run to Queue"
+                actionLabel="Add to Queue"
+                loadingLabel="Adding..."
+                loading={addQueueItem.isPending}
+            />
+            <AlertDialog
+                open={stopRunDialogOpen}
+                onOpenChange={(open) => {
+                    setStopRunDialogOpen(open);
+                    if (!open) setStopRunTarget(null);
+                }}
+            >
                 <AlertDialogContent className="glass-card bg-[var(--bg-main)]/90 border-[var(--border-subtle)]">
                     <AlertDialogHeader>
                         <AlertDialogTitle className="text-[var(--text-primary)]">
-                            Stop Run?
+                            {currentRunStatus === "pending" ? "Cancel Pending Run?" : "Stop Run?"}
                         </AlertDialogTitle>
                         <AlertDialogDescription className="text-[var(--text-secondary)]">
-                            Stop the active transcription run for "{audioFile.title || audioFile.audio_path.split("/").pop() || "this audio"}"?
-                            Partially transcribed data may be saved.
+                            {currentRunStatus === "pending" ? "Cancel" : "Stop"} the {currentRunStatus === "pending" ? "pending" : "active"} transcription run for "{audioFile.title || audioFile.audio_path.split("/").pop() || "this audio"}"?
+                            {currentRunStatus !== "pending" && " Partially transcribed data may be saved."}
+                            {queuedRuns.length > 0 && (
+                                <span className="mt-2 block text-amber-700 dark:text-amber-300">
+                                    The next waiting run will start automatically after this run stops and the worker finishes cleanup.
+                                </span>
+                            )}
                         </AlertDialogDescription>
                     </AlertDialogHeader>
                     <AlertDialogFooter>
@@ -748,10 +1033,10 @@ export const AudioDetailView = function AudioDetailView({ audioId: propAudioId }
                             {stopRunLoading ? (
                                 <>
                                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                    Stopping...
+                                    {currentRunStatus === "pending" ? "Cancelling..." : "Stopping..."}
                                 </>
                             ) : (
-                                "Stop Run"
+                                currentRunStatus === "pending" ? "Cancel Run" : "Stop Run"
                             )}
                         </AlertDialogAction>
                     </AlertDialogFooter>

@@ -144,7 +144,7 @@
       "method": "POST",
       "path": "/api/v1/transcription/{id}/kill",
       "summary": "Kill running transcription job",
-      "description": "Cancel a currently running or queued transcription job",
+      "description": "Cancel a currently running or queued transcription job. A queue_item_id targets that exact queued run; an empty JSON object targets only an unqueued legacy run. Omitting the body preserves unrestricted legacy behavior.",
       "tag": "transcription"
     },
     {
@@ -426,6 +426,41 @@
       "summary": "Validate OpenAI API Key",
       "description": "Validate the provided OpenAI API key and return available Whisper models",
       "tag": "config"
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/transcription/{id}/queue",
+      "summary": "List sequential transcription runs",
+      "description": "Return the active per-audio queue item and all future queued runs",
+      "tag": "transcription"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v1/transcription/{id}/queue",
+      "summary": "Queue a sequential transcription run",
+      "description": "Persist one immutable parameter or profile snapshot to run against this audio file",
+      "tag": "transcription"
+    },
+    {
+      "method": "PUT",
+      "path": "/api/v1/transcription/{id}/queue/order",
+      "summary": "Reorder future transcription runs",
+      "description": "",
+      "tag": "transcription"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/transcription/{id}/queue/{queue_id}",
+      "summary": "Cancel a future queued transcription run",
+      "description": "",
+      "tag": "transcription"
+    },
+    {
+      "method": "DELETE",
+      "path": "/api/v1/transcription/{id}/queue",
+      "summary": "Clear future queued transcription runs",
+      "description": "",
+      "tag": "transcription"
     },
     {
       "method": "GET",

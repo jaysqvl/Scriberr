@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"scriberr/internal/models"
@@ -43,17 +44,18 @@ const (
 
 // UnifiedTranscriptionService provides a unified interface for all transcription and diarization models
 type UnifiedTranscriptionService struct {
-	registry              *registry.ModelRegistry
-	pipeline              *pipeline.ProcessingPipeline
-	preprocessors         map[string]interfaces.Preprocessor
-	postprocessors        map[string]interfaces.Postprocessor
-	tempDirectory         string
-	outputDirectory       string
-	defaultModelIDs       map[string]string      // Default model IDs for each task type
-	multiTrackTranscriber *MultiTrackTranscriber // For termination support
-	jobRepo               repository.JobRepository
-	webhookService        *webhook.Service
-	broadcaster           *sse.Broadcaster
+	registry               *registry.ModelRegistry
+	pipeline               *pipeline.ProcessingPipeline
+	preprocessors          map[string]interfaces.Preprocessor
+	postprocessors         map[string]interfaces.Postprocessor
+	tempDirectory          string
+	outputDirectory        string
+	defaultModelIDs        map[string]string // Default model IDs for each task type
+	multiTrackMutex        sync.RWMutex
+	multiTrackTranscribers map[string]*MultiTrackTranscriber // Active transcribers keyed by parent job ID.
+	jobRepo                repository.JobRepository
+	webhookService         *webhook.Service
+	broadcaster            *sse.Broadcaster
 }
 
 // NewUnifiedTranscriptionService creates a new unified transcription service
@@ -69,8 +71,9 @@ func NewUnifiedTranscriptionService(jobRepo repository.JobRepository, tempDir, o
 			"transcription": ModelWhisperX,
 			"diarization":   ModelPyannote,
 		},
-		jobRepo:        jobRepo,
-		webhookService: webhook.NewService(),
+		multiTrackTranscribers: make(map[string]*MultiTrackTranscriber),
+		jobRepo:                jobRepo,
+		webhookService:         webhook.NewService(),
 	}
 }
 
@@ -150,7 +153,19 @@ func (u *UnifiedTranscriptionService) ProcessJob(ctx context.Context, jobID stri
 			execution.ErrorMessage = &errorMsg
 		}
 
-		_ = u.jobRepo.UpdateExecution(ctx, execution)
+		// Cancellation is part of an execution's lifecycle, but a cancelled job
+		// context cannot be used to persist that terminal state. Give bookkeeping
+		// its own short-lived context so run history never remains stuck in
+		// "processing" after a stop or timeout.
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		if err := u.jobRepo.UpdateExecution(cleanupCtx, execution); err != nil {
+			logger.Error("Failed to persist terminal execution status",
+				"job_id", jobID,
+				"execution_id", execution.ID,
+				"status", status,
+				"error", err)
+		}
 
 		// Broadcast update via SSE
 		if u.broadcaster != nil {
@@ -194,7 +209,7 @@ func (u *UnifiedTranscriptionService) ProcessJob(ctx context.Context, jobID stri
 	// Check for multi-track processing
 	if job.IsMultiTrack && job.Parameters.IsMultiTrackEnabled {
 		logger.Info("Processing multi-track job", "job_id", jobID)
-		if err := u.processMultiTrackJob(ctx, job); err != nil {
+		if err := u.processMultiTrackJob(ctx, job, execution); err != nil {
 			errMsg := fmt.Sprintf("multi-track processing failed: %v", err)
 			updateExecutionStatus(models.StatusFailed, errMsg)
 			return fmt.Errorf("%s", errMsg)
@@ -354,7 +369,7 @@ func (u *UnifiedTranscriptionService) processSingleTrackJob(ctx context.Context,
 }
 
 // processMultiTrackJob handles multi-track audio processing
-func (u *UnifiedTranscriptionService) processMultiTrackJob(ctx context.Context, job *models.TranscriptionJob) error {
+func (u *UnifiedTranscriptionService) processMultiTrackJob(ctx context.Context, job *models.TranscriptionJob, execution *models.TranscriptionJobExecution) error {
 	logger.Info("Processing multi-track job", "job_id", job.ID, "track_count", len(job.MultiTrackFiles))
 
 	// Create unified processor for this service
@@ -362,20 +377,45 @@ func (u *UnifiedTranscriptionService) processMultiTrackJob(ctx context.Context, 
 		unifiedService: u,
 	}
 
-	// Create multi-track transcriber with unified processor and store reference for termination
+	// Track each active parent independently. Different audio files may be
+	// processed by different queue workers at the same time.
 	transcriber := NewMultiTrackTranscriber(unifiedProcessor)
-	u.multiTrackTranscriber = transcriber
+	if err := u.registerMultiTrackTranscriber(job.ID, transcriber); err != nil {
+		return err
+	}
+	defer u.unregisterMultiTrackTranscriber(job.ID, transcriber)
 
 	// Process the multi-track transcription
-	return transcriber.ProcessMultiTrackTranscription(ctx, job.ID)
+	return transcriber.ProcessMultiTrackTranscription(ctx, job.ID, execution)
 }
 
 // TerminateMultiTrackJob terminates a multi-track job and all its individual track jobs
 func (u *UnifiedTranscriptionService) TerminateMultiTrackJob(jobID string) error {
-	if u.multiTrackTranscriber == nil {
-		return fmt.Errorf("no multi-track transcriber available")
+	u.multiTrackMutex.RLock()
+	transcriber := u.multiTrackTranscribers[jobID]
+	u.multiTrackMutex.RUnlock()
+	if transcriber == nil {
+		return fmt.Errorf("no active multi-track transcriber for job %s", jobID)
 	}
-	return u.multiTrackTranscriber.TerminateMultiTrackJob(jobID)
+	return transcriber.TerminateMultiTrackJob(jobID)
+}
+
+func (u *UnifiedTranscriptionService) registerMultiTrackTranscriber(jobID string, transcriber *MultiTrackTranscriber) error {
+	u.multiTrackMutex.Lock()
+	defer u.multiTrackMutex.Unlock()
+	if _, exists := u.multiTrackTranscribers[jobID]; exists {
+		return fmt.Errorf("multi-track job %s is already active", jobID)
+	}
+	u.multiTrackTranscribers[jobID] = transcriber
+	return nil
+}
+
+func (u *UnifiedTranscriptionService) unregisterMultiTrackTranscriber(jobID string, transcriber *MultiTrackTranscriber) {
+	u.multiTrackMutex.Lock()
+	defer u.multiTrackMutex.Unlock()
+	if u.multiTrackTranscribers[jobID] == transcriber {
+		delete(u.multiTrackTranscribers, jobID)
+	}
 }
 
 // IsMultiTrackJob checks if a job is a multi-track job

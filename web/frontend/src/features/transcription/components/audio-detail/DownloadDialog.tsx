@@ -14,6 +14,7 @@ import { useState } from "react";
 import { useTranscript, useAudioDetail, type Transcript } from "@/features/transcription/hooks/useAudioDetail";
 import { useSpeakerMappings } from "@/features/transcription/hooks/useTranscriptionSpeakers";
 import { useTranscriptDownload } from "@/features/transcription/hooks/useTranscriptDownload";
+import { getUsableTranscriptSegments } from "@/features/transcription/hooks/transcriptDownloadFormatters";
 
 interface DownloadDialogProps {
     audioId: string;
@@ -33,6 +34,11 @@ export function DownloadDialog({ audioId, isOpen, onClose, initialFormat = 'txt'
 
     const [includeSpeakerLabels, setIncludeSpeakerLabels] = useState(true);
     const [includeTimestamps, setIncludeTimestamps] = useState(true);
+    const segments = getUsableTranscriptSegments(transcript);
+    const hasTimestamps = segments.length > 0;
+    const hasSpeakerLabels = segments.some((segment) => Boolean(segment.speaker));
+    const effectiveIncludeSpeakerLabels = includeSpeakerLabels && hasSpeakerLabels;
+    const effectiveIncludeTimestamps = includeTimestamps && hasTimestamps;
 
     const handleDownloadConfirm = () => {
         if (!transcript || !audioFile) return;
@@ -45,9 +51,15 @@ export function DownloadDialog({ audioId, isOpen, onClose, initialFormat = 'txt'
         const filenameBase = [getFileNameWithoutExt(), filenameSuffix].filter(Boolean).join("-");
 
         if (initialFormat === 'txt') {
-            downloadTXT(transcript, filenameBase, speakerMappings, { includeSpeakerLabels, includeTimestamps });
+            downloadTXT(transcript, filenameBase, speakerMappings, {
+                includeSpeakerLabels: effectiveIncludeSpeakerLabels,
+                includeTimestamps: effectiveIncludeTimestamps,
+            });
         } else {
-            downloadJSON(transcript, filenameBase, speakerMappings, { includeSpeakerLabels, includeTimestamps });
+            downloadJSON(transcript, filenameBase, speakerMappings, {
+                includeSpeakerLabels: effectiveIncludeSpeakerLabels,
+                includeTimestamps: effectiveIncludeTimestamps,
+            });
         }
         onClose(false);
     };
@@ -72,9 +84,9 @@ export function DownloadDialog({ audioId, isOpen, onClose, initialFormat = 'txt'
                         </Label>
                         <Switch
                             id="speaker-labels"
-                            checked={includeSpeakerLabels}
+                            checked={effectiveIncludeSpeakerLabels}
                             onCheckedChange={setIncludeSpeakerLabels}
-                            disabled={!transcript?.segments?.some(s => s.speaker)}
+                            disabled={!hasSpeakerLabels}
                         />
                     </div>
 
@@ -84,13 +96,13 @@ export function DownloadDialog({ audioId, isOpen, onClose, initialFormat = 'txt'
                         </Label>
                         <Switch
                             id="timestamps"
-                            checked={includeTimestamps}
+                            checked={effectiveIncludeTimestamps}
                             onCheckedChange={setIncludeTimestamps}
-                            disabled={!transcript?.segments}
+                            disabled={!hasTimestamps}
                         />
                     </div>
 
-                    {(!includeSpeakerLabels && !includeTimestamps) && (
+                    {(!effectiveIncludeSpeakerLabels && !effectiveIncludeTimestamps) && (
                         <div className="text-sm text-carbon-500 dark:text-carbon-400 bg-carbon-50 dark:bg-carbon-800 p-3 rounded-md">
                             <div className="flex items-center gap-2">
                                 <Check className="h-4 w-4 text-carbon-900 dark:text-carbon-100" />
@@ -99,7 +111,7 @@ export function DownloadDialog({ audioId, isOpen, onClose, initialFormat = 'txt'
                         </div>
                     )}
 
-                    {(includeSpeakerLabels || includeTimestamps) && (
+                    {(effectiveIncludeSpeakerLabels || effectiveIncludeTimestamps) && (
                         <div className="text-sm text-carbon-500 dark:text-carbon-400 bg-carbon-50 dark:bg-carbon-800 p-3 rounded-md">
                             <div className="flex items-center gap-2">
                                 <Check className="h-4 w-4 text-carbon-900 dark:text-carbon-100" />

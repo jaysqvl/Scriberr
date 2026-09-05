@@ -92,6 +92,8 @@ interface TranscriptionConfigDialogProps {
     initialDescription?: string;
     isMultiTrack?: boolean;
     title?: string;
+    actionLabel?: string;
+    loadingLabel?: string;
 }
 
 const DEFAULT_PARAMS: WhisperXParams = {
@@ -267,6 +269,8 @@ export const TranscriptionConfigDialog = memo(function TranscriptionConfigDialog
     initialDescription = "",
     isMultiTrack = false,
     title,
+    actionLabel,
+    loadingLabel,
 }: TranscriptionConfigDialogProps) {
     const [params, setParams] = useState<WhisperXParams>(DEFAULT_PARAMS);
     const [profileName, setProfileName] = useState("");
@@ -298,6 +302,15 @@ export const TranscriptionConfigDialog = memo(function TranscriptionConfigDialog
             const newParams = { ...prev, [key]: value };
             if (key === 'model_family') {
                 const family = value as string;
+                const familyDefaultModels: Record<string, string> = {
+                    whisper: 'small',
+                    nvidia_parakeet: 'parakeet',
+                    nvidia_canary: 'canary',
+                    nvidia_canary_qwen: 'canary_qwen',
+                    mistral_voxtral: 'voxtral',
+                    openai: 'whisper-1',
+                };
+                newParams.model = familyDefaultModels[family] || newParams.model;
                 if (family === 'whisper') {
                     newParams.device = 'cpu';
                     newParams.diarize_model = 'pyannote';
@@ -496,10 +509,10 @@ export const TranscriptionConfigDialog = memo(function TranscriptionConfigDialog
                         {loading ? (
                             <>
                                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                                Starting...
+                                {loadingLabel || "Starting..."}
                             </>
                         ) : (
-                            isProfileMode ? "Save Profile" : "Start Transcription"
+                            actionLabel || (isProfileMode ? "Save Profile" : "Start Transcription")
                         )}
                     </Button>
                 </DialogFooter>

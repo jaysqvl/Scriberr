@@ -1,0 +1,14 @@
+{
+    "extends": "./tsconfig.app.json",
+    "compilerOptions": {
+        "allowImportingTsExtensions": true,
+        "incremental": false,
+        "noEmit": false,
+        "outDir": ".test-dist",
+        "rewriteRelativeImportExtensions": true,
+        "rootDir": "src/features/transcription/hooks",
+        "tsBuildInfoFile": null,
+        "types": ["node"]
+    },
+    "include": ["src/features/transcription/hooks/*.test.ts"]
+}

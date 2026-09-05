@@ -143,6 +143,31 @@ func (suite *APIHandlerTestSuite) TestListRunsBackfillsLegacyCompletedTranscript
 	assert.Equal(suite.T(), int64(1), executionCount)
 }
 
+func (suite *APIHandlerTestSuite) TestListRunsDoesNotDuplicateExecutionDuringFinalization() {
+	job := suite.helper.CreateTestTranscriptionJob(suite.T(), "finishing run")
+	transcript := `{"text":"saved just before execution finalization"}`
+	job.Status = models.StatusCompleted
+	job.Transcript = &transcript
+	assert.NoError(suite.T(), suite.helper.DB.Save(job).Error)
+
+	execution := &models.TranscriptionJobExecution{
+		TranscriptionJobID: job.ID,
+		StartedAt:          time.Now().Add(-time.Minute),
+		ActualParameters:   models.WhisperXParams{ModelFamily: "whisper", Model: "small"},
+		Status:             models.StatusProcessing,
+	}
+	assert.NoError(suite.T(), suite.helper.DB.Create(execution).Error)
+
+	w := suite.makeAuthenticatedRequest(http.MethodGet, "/api/v1/transcription/"+job.ID+"/runs", nil, true)
+	assert.Equal(suite.T(), http.StatusOK, w.Code)
+
+	var executions []models.TranscriptionJobExecution
+	assert.NoError(suite.T(), suite.helper.DB.Where("transcription_job_id = ?", job.ID).Find(&executions).Error)
+	assert.Len(suite.T(), executions, 1)
+	assert.Equal(suite.T(), execution.ID, executions[0].ID)
+	assert.Equal(suite.T(), models.StatusProcessing, executions[0].Status)
+}
+
 func (suite *APIHandlerTestSuite) TestActiveRunCanBePinnedAndCleared() {
 	job := suite.helper.CreateTestTranscriptionJob(suite.T(), "active run selection")
 	job.Status = models.StatusCompleted

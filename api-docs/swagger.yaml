@@ -271,6 +271,15 @@ definitions:
     required:
     - content
     type: object
+  api.QueueTranscriptionRunRequest:
+    properties:
+      parameters:
+        $ref: '#/definitions/models.WhisperXParams'
+      profile_id:
+        type: string
+      profile_name:
+        type: string
+    type: object
   api.RefreshTokenResponse:
     properties:
       token:
@@ -299,6 +308,13 @@ definitions:
       registration_enabled:
         description: Match tests expecting snake_case key
         type: boolean
+    type: object
+  api.ReorderTranscriptionQueueRequest:
+    properties:
+      ordered_ids:
+        items:
+          type: string
+        type: array
     type: object
   api.SetUserDefaultProfileRequest:
     properties:
@@ -383,6 +399,23 @@ definitions:
     - name
     - prompt
     type: object
+  api.TranscriptionQueueResponse:
+    properties:
+      active_item:
+        $ref: '#/definitions/models.TranscriptionQueueItem'
+      cleared:
+        type: integer
+      history:
+        items:
+          $ref: '#/definitions/models.TranscriptionQueueItem'
+        type: array
+      items:
+        items:
+          $ref: '#/definitions/models.TranscriptionQueueItem'
+        type: array
+      job_id:
+        type: string
+    type: object
   api.UpdateUserSettingsRequest:
     properties:
       auto_transcription_enabled:
@@ -411,6 +444,11 @@ definitions:
         type: string
     required:
     - url
+    type: object
+  api.killJobRequest:
+    properties:
+      queue_item_id:
+        type: string
     type: object
   models.JobStatus:
     enum:
@@ -602,6 +640,53 @@ definitions:
       updated_at:
         type: string
     type: object
+  models.TranscriptionQueueItem:
+    properties:
+      completed_at:
+        type: string
+      created_at:
+        type: string
+      error_message:
+        type: string
+      execution_id:
+        type: string
+      id:
+        type: string
+      parameters:
+        $ref: '#/definitions/models.WhisperXParams'
+      position:
+        type: integer
+      profile_id:
+        type: string
+      profile_name:
+        type: string
+      queued_at:
+        type: string
+      started_at:
+        type: string
+      status:
+        $ref: '#/definitions/models.TranscriptionQueueStatus'
+      transcription_job_id:
+        type: string
+      updated_at:
+        type: string
+    type: object
+  models.TranscriptionQueueStatus:
+    enum:
+    - queued
+    - pending
+    - processing
+    - completed
+    - failed
+    - cancelled
+    type: string
+    x-enum-varnames:
+    - QueueStatusQueued
+    - QueueStatusPending
+    - QueueStatusProcessing
+    - QueueStatusCompleted
+    - QueueStatusFailed
+    - QueueStatusCancelled
   models.WhisperXParams:
     properties:
       align_model:
@@ -2149,13 +2234,20 @@ paths:
       - transcription
   /api/v1/transcription/{id}/kill:
     post:
-      description: Cancel a currently running or queued transcription job
+      description: Cancel a currently running or queued transcription job. A queue_item_id
+        targets that exact queued run; an empty JSON object targets only an unqueued
+        legacy run. Omitting the body preserves unrestricted legacy behavior.
       parameters:
       - description: Job ID
         in: path
         name: id
         required: true
         type: string
+      - description: Optional expected queue item identity
+        in: body
+        name: request
+        schema:
+          $ref: '#/definitions/api.killJobRequest'
       produces:
       - application/json
       responses:
@@ -2173,6 +2265,12 @@ paths:
             type: object
         "404":
           description: Not Found
+          schema:
+            additionalProperties:
+              type: string
+            type: object
+        "409":
+          description: Conflict
           schema:
             additionalProperties:
               type: string
@@ -2290,6 +2388,193 @@ paths:
       summary: Create a note for a transcription
       tags:
       - notes
+  /api/v1/transcription/{id}/queue:
+    delete:
+      parameters:
+      - description: Job ID
+        in: path
+        name: id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.TranscriptionQueueResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      security:
+      - ApiKeyAuth: []
+      - BearerAuth: []
+      summary: Clear future queued transcription runs
+      tags:
+      - transcription
+    get:
+      description: Return the active per-audio queue item and all future queued runs
+      parameters:
+      - description: Job ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Include terminal queue audit records
+        in: query
+        name: include_terminal
+        type: boolean
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.TranscriptionQueueResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      security:
+      - ApiKeyAuth: []
+      - BearerAuth: []
+      summary: List sequential transcription runs
+      tags:
+      - transcription
+    post:
+      consumes:
+      - application/json
+      description: Persist one immutable parameter or profile snapshot to run against
+        this audio file
+      parameters:
+      - description: Job ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Queued run request
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/api.QueueTranscriptionRunRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            $ref: '#/definitions/api.TranscriptionQueueResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      security:
+      - ApiKeyAuth: []
+      - BearerAuth: []
+      summary: Queue a sequential transcription run
+      tags:
+      - transcription
+  /api/v1/transcription/{id}/queue/{queue_id}:
+    delete:
+      parameters:
+      - description: Job ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Queue item ID
+        in: path
+        name: queue_id
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.TranscriptionQueueResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      security:
+      - ApiKeyAuth: []
+      - BearerAuth: []
+      summary: Cancel a future queued transcription run
+      tags:
+      - transcription
+  /api/v1/transcription/{id}/queue/order:
+    put:
+      consumes:
+      - application/json
+      parameters:
+      - description: Job ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Complete ordered list of waiting queue item IDs
+        in: body
+        name: request
+        required: true
+        schema:
+          $ref: '#/definitions/api.ReorderTranscriptionQueueRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/api.TranscriptionQueueResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "404":
+          description: Not Found
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/api.ErrorResponse'
+      security:
+      - ApiKeyAuth: []
+      - BearerAuth: []
+      summary: Reorder future transcription runs
+      tags:
+      - transcription
   /api/v1/transcription/{id}/rerun:
     post:
       consumes:

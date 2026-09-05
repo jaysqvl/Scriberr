@@ -34,11 +34,12 @@ interface TranscriptionProfile {
 interface TranscribeDDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onStartTranscription: (params: WhisperXParams, profileId?: string) => void;
+  onStartTranscription: (params: WhisperXParams, profileId?: string, profileName?: string) => void;
   loading?: boolean;
   title?: string;
   description?: string;
   actionLabel?: string;
+  loadingLabel?: string;
   onAdvanced?: () => void;
 }
 
@@ -50,6 +51,7 @@ export function TranscribeDDialog({
   title,
   description,
   actionLabel = "Start Transcription",
+  loadingLabel = "Starting...",
   onAdvanced,
 }: TranscribeDDialogProps) {
   const { getAuthHeaders } = useAuth();
@@ -114,7 +116,7 @@ export function TranscribeDDialog({
 
     const selectedProfile = profiles.find(p => p.id === selectedProfileId);
     if (selectedProfile) {
-      onStartTranscription(selectedProfile.parameters, selectedProfile.id);
+      onStartTranscription(selectedProfile.parameters, selectedProfile.id, selectedProfile.name);
     }
   };
 
@@ -221,7 +223,7 @@ export function TranscribeDDialog({
             {loading ? (
               <>
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Starting...
+                {loadingLabel}
               </>
             ) : (
               actionLabel

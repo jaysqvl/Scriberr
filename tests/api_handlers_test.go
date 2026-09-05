@@ -24,6 +24,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 )
 
@@ -65,6 +66,7 @@ func (suite *APIHandlerTestSuite) SetupSuite() {
 	assert.NoError(suite.T(), err)
 
 	suite.taskQueue = queue.NewTaskQueue(1, suite.unifiedProcessor, jobRepo)
+	suite.taskQueue.SetTranscriptionQueueRepository(repository.NewTranscriptionQueueRepository(suite.helper.DB))
 
 	broadcaster := sse.NewBroadcaster()
 
@@ -405,6 +407,7 @@ func (suite *APIHandlerTestSuite) TestListTranscriptionJobsDeltaSync() {
 
 	// 2. Create another job
 	job2 := suite.helper.CreateTestTranscriptionJob(suite.T(), "Job 2 (To Be Deleted)")
+	require.NoError(suite.T(), suite.helper.DB.Model(job2).Update("status", models.StatusCompleted).Error)
 	time.Sleep(10 * time.Millisecond)
 
 	// Capture time before deletion (but after creation)
@@ -526,6 +529,7 @@ func (suite *APIHandlerTestSuite) TestUpdateTranscriptionTitle() {
 // Test deleting transcription job
 func (suite *APIHandlerTestSuite) TestDeleteTranscriptionJob() {
 	testJob := suite.helper.CreateTestTranscriptionJob(suite.T(), "Job to Delete")
+	require.NoError(suite.T(), suite.helper.DB.Model(testJob).Update("status", models.StatusCompleted).Error)
 
 	w := suite.makeAuthenticatedRequest("DELETE", fmt.Sprintf("/api/v1/transcription/%s", testJob.ID), nil, false)
 	assert.Equal(suite.T(), 200, w.Code)
@@ -533,6 +537,18 @@ func (suite *APIHandlerTestSuite) TestDeleteTranscriptionJob() {
 	// Verify the job was deleted
 	w = suite.makeAuthenticatedRequest("GET", fmt.Sprintf("/api/v1/transcription/%s", testJob.ID), nil, false)
 	assert.Equal(suite.T(), 404, w.Code)
+}
+
+func (suite *APIHandlerTestSuite) TestDeleteTranscriptionJobRejectsPendingWork() {
+	testJob := suite.helper.CreateTestTranscriptionJob(suite.T(), "Pending Job")
+
+	w := suite.makeAuthenticatedRequest("DELETE", fmt.Sprintf("/api/v1/transcription/%s", testJob.ID), nil, false)
+	assert.Equal(suite.T(), http.StatusConflict, w.Code)
+
+	var count int64
+	require.NoError(suite.T(), suite.helper.DB.Model(&models.TranscriptionJob{}).
+		Where("id = ?", testJob.ID).Count(&count).Error)
+	assert.Equal(suite.T(), int64(1), count)
 }
 
 // Test getting supported models

@@ -102,6 +102,7 @@ func main() {
 	noteRepo := repository.NewNoteRepository(database.DB)
 	speakerMappingRepo := repository.NewSpeakerMappingRepository(database.DB)
 	refreshTokenRepo := repository.NewRefreshTokenRepository(database.DB)
+	transcriptionQueueRepo := repository.NewTranscriptionQueueRepository(database.DB)
 
 	// Initialize services
 	logger.Startup("service", "Initializing services")
@@ -131,6 +132,7 @@ func main() {
 	// Initialize task queue
 	logger.Startup("queue", "Starting background processing")
 	taskQueue := queue.NewTaskQueue(2, unifiedProcessor, jobRepo) // 2 workers
+	taskQueue.SetTranscriptionQueueRepository(transcriptionQueueRepo)
 	taskQueue.SetJobTimeout(time.Duration(cfg.MediaTimeoutMinutes) * time.Minute)
 	taskQueue.Start()
 	defer taskQueue.Stop()

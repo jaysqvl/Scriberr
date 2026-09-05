@@ -54,6 +54,10 @@ jobs:
         working-directory: web/frontend
         run: npm audit
 
+      - name: Run Frontend Tests
+        working-directory: web/frontend
+        run: npm test
+
       - name: Build Frontend
         working-directory: web/frontend
         run: npm run build

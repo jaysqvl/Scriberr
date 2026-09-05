@@ -48,10 +48,12 @@ interface RunWorkspaceProps {
     onCompareRunChange: (runId: string) => void;
     onModeChange: (mode: RunWorkspaceMode) => void;
     onRunAgain: () => void;
+    runAgainLabel?: string;
     onStopRun?: () => void;
     runAgainDisabled?: boolean;
     canStopRun?: boolean;
     stoppingRun?: boolean;
+    showRunControl?: boolean;
     onOpenRunDetails: (runId?: string) => void;
     onOpenRunLogs: (runId?: string) => void;
     onDownloadRun: (run: ExecutionRun, format: DownloadFormat, transcript?: Transcript | null) => void;
@@ -76,10 +78,12 @@ export function RunWorkspace({
     onCompareRunChange,
     onModeChange,
     onRunAgain,
+    runAgainLabel = "Run Again",
     onStopRun,
     runAgainDisabled = false,
     canStopRun = false,
     stoppingRun = false,
+    showRunControl = true,
     onOpenRunDetails,
     onOpenRunLogs,
     onDownloadRun,
@@ -107,13 +111,16 @@ export function RunWorkspace({
                             No run history exists for this file yet.
                         </p>
                     </div>
-                    <RunControl
-                        onRunAgain={onRunAgain}
-                        onStopRun={onStopRun}
-                        runAgainDisabled={runAgainDisabled}
-                        canStopRun={canStopRun}
-                        stoppingRun={stoppingRun}
-                    />
+                    {showRunControl && (
+                        <RunControl
+                            onRunAgain={onRunAgain}
+                            runAgainLabel={runAgainLabel}
+                            onStopRun={onStopRun}
+                            runAgainDisabled={runAgainDisabled}
+                            canStopRun={canStopRun}
+                            stoppingRun={stoppingRun}
+                        />
+                    )}
                 </div>
             </section>
         );
@@ -156,13 +163,16 @@ export function RunWorkspace({
                                 </TabsTrigger>
                             </TabsList>
                         </Tabs>
-                        <RunControl
-                            onRunAgain={onRunAgain}
-                            onStopRun={onStopRun}
-                            runAgainDisabled={runAgainDisabled}
-                            canStopRun={canStopRun}
-                            stoppingRun={stoppingRun}
-                        />
+                        {showRunControl && (
+                            <RunControl
+                                onRunAgain={onRunAgain}
+                                runAgainLabel={runAgainLabel}
+                                onStopRun={onStopRun}
+                                runAgainDisabled={runAgainDisabled}
+                                canStopRun={canStopRun}
+                                stoppingRun={stoppingRun}
+                            />
+                        )}
                     </div>
                 </div>
 
@@ -228,12 +238,14 @@ export function RunWorkspace({
 
 function RunControl({
     onRunAgain,
+    runAgainLabel,
     onStopRun,
     runAgainDisabled,
     canStopRun,
     stoppingRun,
 }: {
     onRunAgain: () => void;
+    runAgainLabel: string;
     onStopRun?: () => void;
     runAgainDisabled: boolean;
     canStopRun: boolean;
@@ -267,7 +279,7 @@ function RunControl({
             className="gap-2 rounded-full border-[var(--border-subtle)] bg-[var(--bg-card)]"
         >
             <RefreshCw className="h-4 w-4" />
-            Run Again
+            {runAgainLabel}
         </Button>
     );
 }
@@ -900,6 +912,7 @@ function modelLabel(modelFamily?: string, model?: string) {
     if (modelFamily === "nvidia_canary") return "NVIDIA Canary 1B";
     if (modelFamily === "nvidia_canary_qwen") return "NVIDIA Canary-Qwen 2.5B";
     if (modelFamily === "nvidia_parakeet") return "NVIDIA Parakeet";
+    if (modelFamily === "mistral_voxtral") return "Mistral Voxtral-mini";
     if (modelFamily === "openai") return `OpenAI ${model || "Whisper"}`;
     if (modelFamily === "whisper") return `Whisper ${model || ""}`.trim();
     return modelFamily || "Transcription";

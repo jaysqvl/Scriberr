@@ -880,14 +880,14 @@ func (h *Handler) StartTranscription(c *gin.Context) {
 	job.Summary = nil
 	job.ErrorMessage = nil
 
-	// Save updated job
-	if err := h.jobRepo.Update(c.Request.Context(), job); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update job"})
-		return
-	}
-
-	// Enqueue job for transcription
-	if err := h.taskQueue.EnqueueJob(jobID); err != nil {
+	// Atomically recheck idle/queue state, save the parameters, and dispatch.
+	// This prevents a concurrent sequential POST from being overwritten by a
+	// legacy immediate rerun.
+	if err := h.taskQueue.StartImmediateRun(c.Request.Context(), job); err != nil {
+		if errors.Is(err, queue.ErrJobStateChanged) {
+			c.JSON(http.StatusConflict, gin.H{"error": "Cannot start an immediate run because the job or queue changed"})
+			return
+		}
 		logger.Error("Failed to enqueue job", "job_id", jobID, "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to enqueue job"})
 		return
@@ -930,8 +930,18 @@ func (h *Handler) getJobForTranscription(c *gin.Context, jobID string) (*models.
 }
 
 func (h *Handler) getValidatedTranscriptionParams(c *gin.Context, job *models.TranscriptionJob, jobID string) (*models.WhisperXParams, error) {
-	// Set defaults
-	requestParams := models.WhisperXParams{
+	requestParams := defaultTranscriptionParams()
+
+	// Parse request body parameters, overriding defaults
+	if err := bindJSON(c, &requestParams); err != nil {
+		// Use defaults if JSON parsing fails
+		logger.Debug("Failed to parse JSON parameters, using defaults", "error", err)
+	}
+	return h.validateTranscriptionParams(c, job, jobID, &requestParams)
+}
+
+func defaultTranscriptionParams() models.WhisperXParams {
+	return models.WhisperXParams{
 		ModelFamily:                    "whisper", // Default to whisper for backward compatibility
 		Model:                          "small",
 		ModelCacheOnly:                 false,
@@ -972,13 +982,9 @@ func (h *Handler) getValidatedTranscriptionParams(c *gin.Context, job *models.Tr
 		AttentionContextRight:          256,
 		IsMultiTrackEnabled:            false,
 	}
+}
 
-	// Parse request body parameters, overriding defaults
-	if err := bindJSON(c, &requestParams); err != nil {
-		// Use defaults if JSON parsing fails
-		logger.Debug("Failed to parse JSON parameters, using defaults", "error", err)
-	}
-
+func (h *Handler) validateTranscriptionParams(c *gin.Context, job *models.TranscriptionJob, jobID string, requestParams *models.WhisperXParams) (*models.WhisperXParams, error) {
 	// Debug: log what we received
 	logger.Debug("Parsed transcription parameters",
 		"job_id", jobID,
@@ -1017,22 +1023,36 @@ func (h *Handler) getValidatedTranscriptionParams(c *gin.Context, job *models.Tr
 		return nil, fmt.Errorf("diarization conflict")
 	}
 
-	return &requestParams, nil
+	return requestParams, nil
+}
+
+type killJobRequest struct {
+	QueueItemID string `json:"queue_item_id"`
 }
 
 // @Summary Kill running transcription job
-// @Description Cancel a currently running or queued transcription job
+// @Description Cancel a currently running or queued transcription job. A queue_item_id targets that exact queued run; an empty JSON object targets only an unqueued legacy run. Omitting the body preserves unrestricted legacy behavior.
 // @Tags transcription
 // @Produce json
 // @Param id path string true "Job ID"
+// @Param request body killJobRequest false "Optional expected queue item identity"
 // @Success 200 {object} map[string]string
 // @Failure 404 {object} map[string]string
 // @Failure 400 {object} map[string]string
+// @Failure 409 {object} map[string]string
 // @Router /api/v1/transcription/{id}/kill [post]
 // @Security ApiKeyAuth
 // @Security BearerAuth
 func (h *Handler) KillJob(c *gin.Context) {
 	jobID := c.Param("id")
+	var request killJobRequest
+	hasTargetPrecondition := c.Request.ContentLength != 0
+	if hasTargetPrecondition {
+		if err := bindLimitedJSON(c, &request, maxAuthBodyBytes); err != nil {
+			c.JSON(requestBodyErrorStatus(err), gin.H{"error": "Invalid cancellation request"})
+			return
+		}
+	}
 
 	job, err := h.jobRepo.FindByID(c.Request.Context(), jobID)
 	if err != nil {
@@ -1051,8 +1071,18 @@ func (h *Handler) KillJob(c *gin.Context) {
 	}
 
 	// Attempt to kill the job
-	if err := h.taskQueue.KillJob(jobID); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	var killErr error
+	if hasTargetPrecondition {
+		killErr = h.taskQueue.KillJobIfCurrent(jobID, request.QueueItemID)
+	} else {
+		killErr = h.taskQueue.KillJob(jobID)
+	}
+	if killErr != nil {
+		if errors.Is(killErr, queue.ErrQueueTargetChanged) {
+			c.JSON(http.StatusConflict, gin.H{"error": killErr.Error()})
+			return
+		}
+		c.JSON(http.StatusBadRequest, gin.H{"error": killErr.Error()})
 		return
 	}
 
@@ -1124,17 +1154,16 @@ func (h *Handler) UpdateTranscriptionTitle(c *gin.Context) {
 func (h *Handler) DeleteTranscriptionJob(c *gin.Context) {
 	jobID := c.Param("id")
 
-	job, err := h.jobRepo.FindByID(c.Request.Context(), jobID)
+	job, releaseDeletion, err := h.taskQueue.ReserveJobDeletion(c.Request.Context(), jobID)
 	if err != nil {
+		if errors.Is(err, queue.ErrJobStateChanged) {
+			c.JSON(http.StatusConflict, gin.H{"error": "Cannot delete a job with active or waiting transcription runs"})
+			return
+		}
 		c.JSON(http.StatusNotFound, gin.H{"error": "Job not found"})
 		return
 	}
-
-	// Prevent deletion of jobs that are currently processing
-	if job.Status == models.StatusProcessing {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Cannot delete job that is currently processing"})
-		return
-	}
+	defer releaseDeletion()
 
 	// Delete files
 	if job.IsMultiTrack && job.MultiTrackFolder != nil {
@@ -1184,6 +1213,12 @@ func (h *Handler) DeleteTranscriptionJob(c *gin.Context) {
 	// Delete Job Executions
 	if err := h.jobRepo.DeleteExecutionsByJobID(ctx, jobID); err != nil {
 		fmt.Printf("Failed to delete job executions for job %s: %v\n", jobID, err)
+	}
+
+	// Delete durable sequential-run records for legacy databases that may not
+	// have the current foreign-key cascade.
+	if err := h.taskQueue.DeleteSequentialRuns(ctx, jobID); err != nil {
+		fmt.Printf("Failed to delete queued runs for job %s: %v\n", jobID, err)
 	}
 
 	// Delete MultiTrack Files (DB records)
