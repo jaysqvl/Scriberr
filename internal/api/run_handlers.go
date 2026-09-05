@@ -17,6 +17,12 @@ func (h *Handler) preserveCurrentRunSnapshot(ctx context.Context, job *models.Tr
 	if job == nil || job.Transcript == nil {
 		return nil
 	}
+	// Modern processors own their execution record. During the narrow interval
+	// between saving a transcript and finalizing that record, polling /runs must
+	// not manufacture a second legacy snapshot.
+	if job.Status == models.StatusPending || job.Status == models.StatusProcessing {
+		return nil
+	}
 
 	legacyLogPath := filepath.Join(h.config.TranscriptsDir, job.ID, "transcription.log")
 	var logPath *string
@@ -24,8 +30,11 @@ func (h *Handler) preserveCurrentRunSnapshot(ctx context.Context, job *models.Tr
 		logPath = &legacyLogPath
 	}
 
-	execution, err := h.jobRepo.FindLatestCompletedExecution(ctx, job.ID)
+	execution, err := h.jobRepo.FindLatestExecution(ctx, job.ID)
 	if err == nil {
+		if execution.Status == models.StatusPending || execution.Status == models.StatusProcessing {
+			return nil
+		}
 		changed := false
 		if execution.Transcript == nil {
 			execution.Transcript = job.Transcript

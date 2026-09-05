@@ -51,7 +51,7 @@ type TrackTranscript struct {
 }
 
 // ProcessMultiTrackTranscription processes a multi-track transcription job
-func (mt *MultiTrackTranscriber) ProcessMultiTrackTranscription(ctx context.Context, jobID string) error {
+func (mt *MultiTrackTranscriber) ProcessMultiTrackTranscription(ctx context.Context, jobID string, execution *models.TranscriptionJobExecution) error {
 	overallStartTime := time.Now()
 
 	// Load the job and track files
@@ -205,14 +205,15 @@ func (mt *MultiTrackTranscriber) ProcessMultiTrackTranscription(ctx context.Cont
 		return fmt.Errorf("failed to save transcription results: %w", err)
 	}
 
-	// Create execution record with timing data for multi-track job
+	// Attach multi-track timing data to the execution created by the unified
+	// service. Keeping one record per attempt makes run history and durable queue
+	// linkage unambiguous.
 	overallEndTime := time.Now()
 	overallDuration := overallEndTime.Sub(overallStartTime).Milliseconds()
 
-	if err := mt.createMultiTrackExecutionRecord(jobID, overallStartTime, overallEndTime, overallDuration,
-		trackTimings, mergeStartTime, mergeEndTime, mergeDuration, job.Parameters); err != nil {
-		logger.Warn("Failed to create execution record", "job_id", jobID, "error", err)
-		// Don't fail the job for execution record issues, just log the warning
+	if err := applyMultiTrackExecutionTiming(execution, overallEndTime, overallDuration,
+		trackTimings, mergeStartTime, mergeEndTime, mergeDuration); err != nil {
+		return fmt.Errorf("failed to attach multi-track execution timing: %w", err)
 	}
 
 	logger.Info("Multi-track transcription completed successfully",
@@ -680,15 +681,18 @@ func (mt *MultiTrackTranscriber) createSpeakerMappings(jobID string, trackTransc
 	return nil
 }
 
-// createMultiTrackExecutionRecord creates execution record with multi-track timing data
-func (mt *MultiTrackTranscriber) createMultiTrackExecutionRecord(
-	jobID string,
-	startTime, endTime time.Time,
+// applyMultiTrackExecutionTiming enriches the execution record that represents
+// this attempt. The unified service persists it when the attempt completes.
+func applyMultiTrackExecutionTiming(
+	execution *models.TranscriptionJobExecution,
+	endTime time.Time,
 	totalDuration int64,
 	trackTimings []models.MultiTrackTiming,
 	mergeStartTime, mergeEndTime time.Time,
-	mergeDuration int64,
-	parameters models.WhisperXParams) error {
+	mergeDuration int64) error {
+	if execution == nil {
+		return fmt.Errorf("execution record is required")
+	}
 
 	// Serialize track timings to JSON
 	trackTimingsJSON, err := json.Marshal(trackTimings)
@@ -697,32 +701,12 @@ func (mt *MultiTrackTranscriber) createMultiTrackExecutionRecord(
 	}
 	trackTimingsStr := string(trackTimingsJSON)
 
-	// Create execution record
-	execution := &models.TranscriptionJobExecution{
-		TranscriptionJobID: jobID,
-		StartedAt:          startTime,
-		CompletedAt:        &endTime,
-		ProcessingDuration: &totalDuration,
-
-		// Multi-track specific data
-		MultiTrackTimings: &trackTimingsStr,
-		MergeStartTime:    &mergeStartTime,
-		MergeEndTime:      &mergeEndTime,
-		MergeDuration:     &mergeDuration,
-
-		ActualParameters: parameters.WithoutSecrets(),
-		Status:           models.StatusCompleted,
-	}
-
-	if err := mt.db.Create(execution).Error; err != nil {
-		return fmt.Errorf("failed to create execution record: %w", err)
-	}
-
-	logger.Info("Created multi-track execution record",
-		"job_id", jobID,
-		"total_duration_ms", totalDuration,
-		"merge_duration_ms", mergeDuration,
-		"tracks_count", len(trackTimings))
+	execution.CompletedAt = &endTime
+	execution.ProcessingDuration = &totalDuration
+	execution.MultiTrackTimings = &trackTimingsStr
+	execution.MergeStartTime = &mergeStartTime
+	execution.MergeEndTime = &mergeEndTime
+	execution.MergeDuration = &mergeDuration
 
 	return nil
 }
