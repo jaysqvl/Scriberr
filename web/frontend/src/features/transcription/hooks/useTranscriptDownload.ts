@@ -1,16 +1,13 @@
 import type { Transcript } from "@/features/transcription/hooks/useAudioDetail";
+import {
+    formatTranscriptAsSRT,
+    formatTranscriptAsTXT,
+    getTranscriptText,
+    getUsableTranscriptSegments,
+    type TranscriptDownloadOptions,
+} from "@/features/transcription/hooks/transcriptDownloadFormatters";
 
 export function useTranscriptDownload() {
-
-    const formatSRTTime = (seconds: number): string => {
-        const hours = Math.floor(seconds / 3600);
-        const minutes = Math.floor((seconds % 3600) / 60);
-        const secs = Math.floor(seconds % 60);
-        const milliseconds = Math.floor((seconds % 1) * 1000);
-
-        return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')},${milliseconds.toString().padStart(3, '0')}`;
-    };
-
     const formatTimestamp = (seconds: number): string => {
         const minutes = Math.floor(seconds / 60);
         const remainingSeconds = Math.floor(seconds % 60);
@@ -36,83 +33,45 @@ export function useTranscriptDownload() {
     const downloadSRT = (transcript: Transcript, filenameBase: string, speakerMappings: Record<string, string>) => {
         if (!transcript) return;
 
-        let srtContent = '';
-        let counter = 1;
-
-        if (transcript.segments) {
-            transcript.segments.forEach((segment) => {
-                const startTime = formatSRTTime(segment.start);
-                const endTime = formatSRTTime(segment.end);
-                let text = segment.text.trim();
-
-                if (segment.speaker) {
-                    text = `${getDisplaySpeakerName(segment.speaker, speakerMappings)}: ${text}`;
-                }
-
-                srtContent += `${counter}\n${startTime} --> ${endTime}\n${text}\n\n`;
-                counter++;
-            });
-        } else {
-            srtContent = `1\n00:00:00,000 --> 99:59:59,999\n${transcript.text}\n\n`;
-        }
-
-        downloadFile(srtContent, `${filenameBase}.srt`, 'text/plain');
+        const srtContent = formatTranscriptAsSRT(transcript, speakerMappings);
+        downloadFile(srtContent, `${filenameBase}.srt`, "application/x-subrip;charset=utf-8");
     };
 
     const downloadTXT = (
         transcript: Transcript,
         filenameBase: string,
         speakerMappings: Record<string, string>,
-        options: { includeTimestamps: boolean; includeSpeakerLabels: boolean }
+        options: TranscriptDownloadOptions
     ) => {
         if (!transcript) return;
 
-        let content = '';
-
-        if (!options.includeSpeakerLabels && !options.includeTimestamps) {
-            content = transcript.text;
-        } else if (transcript.segments) {
-            transcript.segments.forEach((segment, index) => {
-                if (index > 0) content += '\n\n';
-
-                if (options.includeTimestamps) {
-                    content += `[${formatTimestamp(segment.start)}] `;
-                }
-
-                if (options.includeSpeakerLabels && segment.speaker) {
-                    content += `${getDisplaySpeakerName(segment.speaker, speakerMappings)}: `;
-                }
-
-                content += segment.text.trim();
-            });
-        } else {
-            content = transcript.text;
-        }
-
-        downloadFile(content, `${filenameBase}.txt`, 'text/plain');
+        const content = formatTranscriptAsTXT(transcript, speakerMappings, options);
+        downloadFile(content, `${filenameBase}.txt`, "text/plain;charset=utf-8");
     };
 
     const downloadJSON = (
         transcript: Transcript,
         filenameBase: string,
         speakerMappings: Record<string, string>,
-        options: { includeTimestamps: boolean; includeSpeakerLabels: boolean }
+        options: TranscriptDownloadOptions
     ) => {
         if (!transcript) return;
 
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         let jsonData: any;
+        const segments = getUsableTranscriptSegments(transcript);
+        const text = getTranscriptText(transcript);
 
         if (!options.includeSpeakerLabels && !options.includeTimestamps) {
             jsonData = {
-                text: transcript.text,
+                text,
                 format: 'simple'
             };
-        } else if (transcript.segments) {
+        } else if (segments.length > 0) {
             jsonData = {
-                text: transcript.text,
+                text,
                 format: 'segmented',
-                segments: transcript.segments.map(segment => {
+                segments: segments.map(segment => {
                     // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     const segmentData: any = {
                         text: segment.text.trim()
@@ -133,7 +92,7 @@ export function useTranscriptDownload() {
             };
         } else {
             jsonData = {
-                text: transcript.text,
+                text,
                 format: 'simple'
             };
         }
