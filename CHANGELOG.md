@@ -5,7 +5,6 @@
 
 ### Features
 
-* add sequential transcription run queues ([4596080](https://github.com/jaysqvl/Scriberr/commit/45960800e4ddc5dd2bbc4ff07c489b763373d364))
 * **queue:** add sequential transcription runs ([ccc8f46](https://github.com/jaysqvl/Scriberr/commit/ccc8f46f68fd994140b883212f789756ef8cd65f))
 
 
