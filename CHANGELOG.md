@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.6.1](https://github.com/jaysqvl/Scriberr/compare/v1.6.0...v1.6.1) (2026-09-05)
+
+
+### Bug Fixes
+
+* **audio:** restore streaming and responsive layouts ([912a67e](https://github.com/jaysqvl/Scriberr/commit/912a67ed225d489c82c81d09d29719df3d26594c))
+
 ## [1.6.0](https://github.com/jaysqvl/Scriberr/compare/v1.5.17...v1.6.0) (2026-09-05)
 
 
