@@ -149,6 +149,10 @@ export function useAudioDetail(audioId: string) {
             if (!response.ok) throw new Error("Failed to fetch audio details");
             return response.json() as Promise<AudioFile>;
         },
+        // Native media requests use an HttpOnly cookie rather than the bearer
+        // header. Always complete one authenticated request after mount so the
+        // server can synchronize that cookie before the player receives a URL.
+        refetchOnMount: "always",
         // Poll while processing or pending
         refetchInterval: (query) => {
             const status = query.state.data?.status;

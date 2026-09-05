@@ -1496,17 +1496,8 @@ func (h *Handler) Login(c *gin.Context) {
 		return
 	}
 
-	// Set access token cookie for streaming/media access
-	// Use Lax mode because Strict mode blocks <audio>/<video> subresource requests on mobile browsers.
-	http.SetCookie(c.Writer, &http.Cookie{
-		Name:     "scriberr_access_token",
-		Value:    token,
-		Path:     "/",
-		Expires:  time.Now().Add(24 * time.Hour), // Match your token duration constant
-		HttpOnly: true,
-		Secure:   h.config.SecureCookies, // Use explicit secure flag
-		SameSite: http.SameSiteLaxMode,
-	})
+	// Native <audio>/<video> requests cannot attach the bearer header.
+	h.setAccessTokenCookie(c, token)
 
 	response := LoginResponse{Token: token}
 	response.User.ID = user.ID
@@ -1564,7 +1555,7 @@ func (h *Handler) Logout(c *gin.Context) {
 		MaxAge:   -1,
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
-		Secure:   h.config.SecureCookies,
+		Secure:   h.cookieSecure(c),
 	})
 	// Also clear access token
 	http.SetCookie(c.Writer, &http.Cookie{
@@ -1575,7 +1566,7 @@ func (h *Handler) Logout(c *gin.Context) {
 		MaxAge:   -1,
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
-		Secure:   h.config.SecureCookies,
+		Secure:   h.cookieSecure(c),
 	})
 	if revocationFailed {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to revoke session"})
@@ -1687,6 +1678,7 @@ func (h *Handler) Register(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create session"})
 		return
 	}
+	h.setAccessTokenCookie(c, token)
 	response := LoginResponse{Token: token}
 	response.User.ID = user.ID
 	response.User.Username = user.Username
@@ -1729,16 +1721,7 @@ func (h *Handler) Refresh(c *gin.Context) {
 		return
 	}
 
-	// Set access token cookie for streaming/media access
-	http.SetCookie(c.Writer, &http.Cookie{
-		Name:     "scriberr_access_token",
-		Value:    token,
-		Path:     "/",
-		Expires:  time.Now().Add(24 * time.Hour),
-		HttpOnly: true,
-		Secure:   h.config.SecureCookies,
-		SameSite: http.SameSiteLaxMode,
-	})
+	h.setAccessTokenCookie(c, token)
 
 	c.JSON(http.StatusOK, RefreshTokenResponse{Token: token})
 }
@@ -1773,7 +1756,7 @@ func (h *Handler) setRefreshTokenCookie(c *gin.Context, tokenValue string, expir
 		MaxAge:   int((14 * 24 * time.Hour).Seconds()),
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
-		Secure:   h.config.SecureCookies,
+		Secure:   h.cookieSecure(c),
 	})
 }
 

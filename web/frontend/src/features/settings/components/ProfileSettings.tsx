@@ -296,9 +296,9 @@ export function ProfileSettings() {
 				</div>
 
 				{/* Default Profile Selection */}
-				<div className="mb-6 p-4 bg-[var(--bg-card)] rounded-lg border border-[var(--border-subtle)]">
-					<div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
-						<div className="flex-1">
+				<div data-testid="default-profile-card" className="mb-6 p-4 bg-[var(--bg-card)] rounded-lg border border-[var(--border-subtle)]">
+					<div className="flex min-w-0 flex-col items-start gap-4 sm:flex-row sm:items-center">
+						<div className="min-w-0 flex-1">
 							<label className="block text-sm font-medium text-[var(--text-primary)] mb-1">
 								Default Profile
 							</label>
@@ -306,14 +306,18 @@ export function ProfileSettings() {
 								The profile to use by default when starting new transcriptions.
 							</p>
 						</div>
-						<div className="w-full sm:w-64">
+						<div className="w-full min-w-0 sm:w-64 sm:shrink-0">
 							<Select
 								value={defaultProfile?.id || ""}
 								onValueChange={handleDefaultProfileChange}
 								disabled={isLoadingProfiles || profiles.length === 0}
 							>
-								<SelectTrigger className="bg-[var(--bg-main)] border-[var(--border-subtle)] text-[var(--text-primary)]">
+								<SelectTrigger
+									data-testid="default-profile-select"
+									className="w-full min-w-0 max-w-full bg-[var(--bg-main)] border-[var(--border-subtle)] text-[var(--text-primary)] [&_[data-slot=select-value]]:block [&_[data-slot=select-value]]:min-w-0 [&_[data-slot=select-value]]:flex-1 [&_[data-slot=select-value]]:truncate"
+								>
 									<SelectValue
+										className="min-w-0 flex-1 truncate text-left"
 										placeholder={
 											isLoadingProfiles
 												? "Loading..."

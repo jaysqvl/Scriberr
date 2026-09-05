@@ -109,7 +109,12 @@ export const AudioDetailView = function AudioDetailView({ audioId: propAudioId }
     const [runViewMode, setRunViewMode] = useState<"transcript" | "compare">("transcript");
 
     // Data Fetching
-    const { data: audioFile, isLoading, error } = useAudioDetail(audioId || "");
+    const {
+        data: audioFile,
+        isLoading,
+        isFetchedAfterMount: audioSessionReady,
+        error,
+    } = useAudioDetail(audioId || "");
     const queueQuery = useTranscriptionQueue(audioId || "", !!audioId);
     const queuedRuns = useMemo(
         () => getQueuedItems(queueQuery.data?.items || []),
@@ -637,8 +642,8 @@ export const AudioDetailView = function AudioDetailView({ audioId: propAudioId }
                                 <Header />
                             </div>
                             <div className="space-y-6 sm:space-y-8">
-                                {/* Sticky header: Title + Audio Player */}
-                                <div className="sticky top-0 z-10">
+                                {/* Title + Audio Player */}
+                                <div data-testid="audio-detail-media-header">
                                     {/* Title & Metadata */}
                                     <div className="space-y-4 glass-card rounded-[var(--radius-card)] border-[var(--border-subtle)] shadow-[var(--shadow-card)] p-4 md:p-6 mb-4">
                                     <div className="flex items-start justify-between gap-4">
@@ -806,7 +811,10 @@ export const AudioDetailView = function AudioDetailView({ audioId: propAudioId }
                                     <div className="glass-card rounded-[var(--radius-card)] border-[var(--border-subtle)] shadow-[var(--shadow-card)] p-4 md:p-6 mb-8 transition-all duration-300 hover:shadow-[var(--shadow-float)]">
                                         <EmberPlayer
                                             ref={audioPlayerRef}
-                                            audioId={audioId}
+                                            // Wait for a post-mount authenticated response so the
+                                            // backend can synchronize the cookie used by native media
+                                            // requests, even when the detail data came from query cache.
+                                            audioId={audioSessionReady ? audioId : undefined}
                                             onTimeUpdate={handleTimeUpdate}
                                             onPlayStateChange={setIsPlaying}
                                         />
