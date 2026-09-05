@@ -87,7 +87,16 @@ func (h *TestHelper) GetDB() *gorm.DB {
 // Cleanup removes test database and upload directory
 func (h *TestHelper) Cleanup() {
 	database.Close()
-	os.Remove(h.Config.DatabasePath)
+	// SQLite WAL mode creates sidecars beside the configured database. Remove
+	// all three exact paths so test runs never leave generated files that make
+	// CI's clean-worktree check fail.
+	for _, path := range []string{
+		h.Config.DatabasePath,
+		h.Config.DatabasePath + "-shm",
+		h.Config.DatabasePath + "-wal",
+	} {
+		_ = os.Remove(path)
+	}
 	os.RemoveAll(h.Config.UploadDir)
 	os.RemoveAll(h.Config.TempDir)
 }
@@ -101,6 +110,7 @@ func (h *TestHelper) ResetDB(t *testing.T) {
 		&models.Note{},
 		&models.ChatSession{},
 		&models.TranscriptionJobExecution{}, // Assuming this exists based on MockJobRepository
+		&models.TranscriptionQueueItem{},
 		&models.TranscriptionJob{},
 		&models.TranscriptionProfile{},
 		&models.SummaryTemplate{},

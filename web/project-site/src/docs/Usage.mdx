@@ -86,6 +86,15 @@ Use the **Action Menu (⋮)** at the top right of the page to:
 * View execution logs and technical info.
 * Rename the recording (or simply click the title to edit).
 
+### Sequential Run Queue
+Use the **Job Queue** in the Transcript View when you want to compare several transcription setups on the same audio file:
+
+1. Select **Add Run**, then choose a saved profile or configure an advanced run.
+2. Add as many model configurations as needed and arrange the waiting runs with the up and down controls.
+3. Leave the page if you want—the queue is stored on the server and survives reloads and restarts.
+
+Only one queued run for an audio file processes at a time. You can stop the active run, cancel individual waiting runs, or clear all waiting runs. After an active run completes or is stopped, Scriberr waits for worker cleanup and then starts the next run automatically. Completed attempts remain available in **Runs** for comparison and download.
+
 ## 4. AI & LLM Features
 Scriberr can connect to an LLM to Summarize or Chat with your audio.
 

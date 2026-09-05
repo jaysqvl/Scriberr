@@ -300,6 +300,40 @@ func (r *jobRepository) UpdateStatus(ctx context.Context, jobID string, status m
 	return r.db.WithContext(ctx).Model(&models.TranscriptionJob{}).Where("id = ?", jobID).Update("status", status).Error
 }
 
+// ClaimPending atomically transitions a legacy (non sequential-item) pending
+// job. TaskQueue discovers this optional capability through a narrow interface,
+// preserving compatibility with existing JobRepository mocks.
+func (r *jobRepository) ClaimPending(ctx context.Context, jobID string) (bool, error) {
+	result := r.db.WithContext(ctx).Model(&models.TranscriptionJob{}).
+		Where("id = ? AND status = ?", jobID, models.StatusPending).
+		Update("status", models.StatusProcessing)
+	return result.RowsAffected == 1, result.Error
+}
+
+// FailProcessingExecutions reconciles run-history rows left active by an
+// abrupt server stop. It is discovered by TaskQueue as an optional recovery
+// capability so existing repository implementations remain compatible.
+func (r *jobRepository) FailProcessingExecutions(ctx context.Context, jobID, reason string) error {
+	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var executions []models.TranscriptionJobExecution
+		if err := tx.Where("transcription_job_id = ? AND status = ?", jobID, models.StatusProcessing).
+			Find(&executions).Error; err != nil {
+			return err
+		}
+		now := time.Now()
+		for index := range executions {
+			executions[index].Status = models.StatusFailed
+			executions[index].ErrorMessage = &reason
+			executions[index].CompletedAt = &now
+			executions[index].CalculateProcessingDuration()
+			if err := tx.Save(&executions[index]).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 func (r *jobRepository) UpdateError(ctx context.Context, jobID string, errorMsg string) error {
 	return r.db.WithContext(ctx).Model(&models.TranscriptionJob{}).Where("id = ?", jobID).Update("error_message", errorMsg).Error
 }

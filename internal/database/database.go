@@ -87,6 +87,7 @@ func Initialize(dbPath string) error {
 	if err := DB.AutoMigrate(
 		&models.TranscriptionJob{},
 		&models.TranscriptionJobExecution{},
+		&models.TranscriptionQueueItem{},
 		&models.SpeakerMapping{},
 		&models.MultiTrackFile{},
 		&models.User{},

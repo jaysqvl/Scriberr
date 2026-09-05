@@ -48,6 +48,21 @@ const (
 	StatusFailed     JobStatus = "failed"
 )
 
+// TranscriptionQueueStatus represents the durable lifecycle of one queued
+// transcription run. Queue statuses are deliberately separate from JobStatus:
+// a TranscriptionJob is the audio container, while each queue item is one
+// immutable attempt against that audio.
+type TranscriptionQueueStatus string
+
+const (
+	QueueStatusQueued     TranscriptionQueueStatus = "queued"
+	QueueStatusPending    TranscriptionQueueStatus = "pending"
+	QueueStatusProcessing TranscriptionQueueStatus = "processing"
+	QueueStatusCompleted  TranscriptionQueueStatus = "completed"
+	QueueStatusFailed     TranscriptionQueueStatus = "failed"
+	QueueStatusCancelled  TranscriptionQueueStatus = "cancelled"
+)
+
 // WhisperXParams contains parameters for WhisperX transcription
 type WhisperXParams struct {
 	// Model family (whisper or nvidia)
@@ -374,6 +389,72 @@ func (tje *TranscriptionJobExecution) CalculateProcessingDuration() {
 		durationMs := duration.Milliseconds()
 		tje.ProcessingDuration = &durationMs
 	}
+}
+
+// TranscriptionQueueItem is a durable, immutable request to run one parameter
+// set against an existing audio file. Nonterminal items retain provider
+// credentials so future runs remain executable; terminal transitions scrub
+// them, and WhisperXParams' MarshalJSON keeps credentials write-only in every
+// API response.
+type TranscriptionQueueItem struct {
+	ID                 string                   `json:"id" gorm:"primaryKey;type:varchar(36)"`
+	TranscriptionJobID string                   `json:"transcription_job_id" gorm:"type:varchar(36);not null;index:idx_transcription_queue_job_status,priority:1"`
+	Parameters         WhisperXParams           `json:"parameters" gorm:"-"`
+	ParametersJSON     string                   `json:"-" gorm:"column:parameters_json;type:text;not null"`
+	ProfileID          *string                  `json:"profile_id,omitempty" gorm:"type:varchar(36)"`
+	ProfileName        *string                  `json:"profile_name,omitempty" gorm:"type:varchar(255)"`
+	Position           int                      `json:"position" gorm:"not null;default:0;index"`
+	Status             TranscriptionQueueStatus `json:"status" gorm:"type:varchar(20);not null;index:idx_transcription_queue_job_status,priority:2"`
+	ExecutionID        *string                  `json:"execution_id,omitempty" gorm:"type:varchar(36);index"`
+	ErrorMessage       *string                  `json:"error_message,omitempty" gorm:"type:text"`
+	QueuedAt           time.Time                `json:"queued_at" gorm:"not null"`
+	StartedAt          *time.Time               `json:"started_at,omitempty"`
+	CompletedAt        *time.Time               `json:"completed_at,omitempty"`
+	CreatedAt          time.Time                `json:"created_at" gorm:"autoCreateTime"`
+	UpdatedAt          time.Time                `json:"updated_at" gorm:"autoUpdateTime"`
+
+	TranscriptionJob TranscriptionJob `json:"-" gorm:"foreignKey:TranscriptionJobID;constraint:OnDelete:CASCADE"`
+}
+
+// BeforeCreate supplies stable identifiers and queue timing metadata.
+func (item *TranscriptionQueueItem) BeforeCreate(tx *gorm.DB) error {
+	if item.ID == "" {
+		item.ID = uuid.New().String()
+	}
+	if item.QueuedAt.IsZero() {
+		item.QueuedAt = time.Now()
+	}
+	if item.Status == "" {
+		item.Status = QueueStatusQueued
+	}
+	return item.encodeParameters()
+}
+
+// BeforeSave keeps the exact request representation in sync. A JSON column is
+// used instead of embedding WhisperXParams because GORM's default tags replace
+// intentional zero/false values during INSERT.
+func (item *TranscriptionQueueItem) BeforeSave(tx *gorm.DB) error {
+	return item.encodeParameters()
+}
+
+// AfterFind restores the API/execution parameter structure without invoking
+// WhisperXParams.MarshalJSON (which correctly redacts credentials for output).
+func (item *TranscriptionQueueItem) AfterFind(tx *gorm.DB) error {
+	if item.ParametersJSON == "" {
+		item.Parameters = WhisperXParams{}
+		return nil
+	}
+	return json.Unmarshal([]byte(item.ParametersJSON), &item.Parameters)
+}
+
+func (item *TranscriptionQueueItem) encodeParameters() error {
+	type storedParams WhisperXParams
+	encoded, err := json.Marshal(storedParams(item.Parameters))
+	if err != nil {
+		return err
+	}
+	item.ParametersJSON = string(encoded)
+	return nil
 }
 
 // SpeakerMapping represents custom speaker names for a transcription job
