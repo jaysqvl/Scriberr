@@ -21,7 +21,7 @@ RUN cd frontend \
 ########################
 # Go build stage
 ########################
-FROM golang:1.26.5-bookworm AS go-builder
+FROM golang:1.26.6-bookworm AS go-builder
 WORKDIR /src
 ARG VERSION=dev
 ARG COMMIT=none
